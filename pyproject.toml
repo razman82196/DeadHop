@@ -1,0 +1,60 @@
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+
+[tool.ruff]
+line-length = 100
+# Enable common rule sets
+lint.select = [
+  "E",  # pycodestyle errors
+  "F",  # pyflakes
+  "I",  # isort
+  "UP", # pyupgrade
+]
+lint.ignore = [
+  "E501",  # defer line-length to Black
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Allow unused imports in __init__.py and test files
+"__init__.py" = ["F401"]
+"tests/*" = ["F401", "F841"]
+"app/main.py" = [
+  "F401",  # imported but unused (runtime optional imports)
+  "F841",  # assigned but unused (signals, placeholders)
+  "E731",  # do not assign a lambda expression (used for lightweight handlers)
+  "E402",  # module level import not at top of file (runtime import ordering)
+  "I001",  # import sorting; skip for legacy file
+  "UP034", # extraneous parentheses; legacy style
+  "F821",  # undefined name in nested async block (known runtime context)
+]
+"app/irc/manager.py" = [
+  "F821",  # undefined names in partial parsing blocks
+  "E702",  # multiple statements per line; legacy style
+  "I001",  # import sorting; skip for legacy file
+]
+
+[tool.pytest.ini_options]
+addopts = "-q --cov=app --cov-report=term-missing --cov-report=xml --cov-report=html"
+asyncio_mode = "auto"
+pythonpath = ["."]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+disallow_untyped_defs = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+show_error_codes = true
+exclude = [
+  "build/",
+  "dist/",
+]
+
+[tool.pytest-qt]
+# Ensure pytest-qt uses PySide6 API
+api = "pyside6"

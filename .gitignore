@@ -1,0 +1,36 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pytest_cache/
+*.egg-info/
+.venv/
+.env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Qt/Browser profiles
+app/resources/qtweb/browser/
+
+# Builds & dist
+build/
+dist/
+*.spec
+*.toc
+
+# Logs
+logs/
+app/logs/
+dist/logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Binaries & shortcuts
+*.exe
+*.lnk

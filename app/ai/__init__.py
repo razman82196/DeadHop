@@ -1,0 +1,1 @@
+# AI integrations (Ollama client)

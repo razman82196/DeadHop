@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="g" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#ffb199"/>
+      <stop offset="60%" stop-color="#ff7f66"/>
+      <stop offset="100%" stop-color="#ff5a3d"/>
+    </radialGradient>
+    <linearGradient id="leaf" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38d39f"/>
+      <stop offset="100%" stop-color="#1aa56e"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" fill-rule="evenodd">
+    <path d="M128 48c-22 0-40 9-52 21C57 88 48 106 48 128c0 40 32 72 72 72s72-32 72-72c0-22-9-40-28-59-12-12-30-21-52-21z" fill="url(#g)"/>
+    <path d="M88 70c12-10 26-16 40-16 14 0 28 6 40 16-6 2-12 3-18 3-17 0-33-7-44-19-6 6-12 11-18 16z" fill="#ffccbf" opacity="0.6"/>
+    <path d="M132 40c12-12 32-16 56-10-20 8-32 20-36 36-8-10-14-18-20-26z" fill="url(#leaf)"/>
+    <circle cx="96" cy="132" r="6" fill="#ffffff" opacity="0.25"/>
+    <circle cx="164" cy="148" r="4" fill="#ffffff" opacity="0.2"/>
+    <path d="M64 144c10 24 34 40 64 40s54-16 64-40c-8 30-36 56-64 56s-56-26-64-56z" fill="#c83f2a" opacity="0.15"/>
+  </g>
+</svg>
