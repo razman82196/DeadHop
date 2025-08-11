@@ -234,6 +234,10 @@ class MainWindow(QMainWindow):
         self._ai_route_target = None
         self._ai_accum = ""
         self._ai_stream_open = False
+        # Channel and unread/highlight tracking structures
+        self._channel_labels: list[str] = []
+        self._unread: dict[str, int] = {}
+        self._highlights: dict[str, int] = {}
 
         # Menus
         self._build_menus()
