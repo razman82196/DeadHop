@@ -39,6 +39,8 @@ from ..ai.ollama import is_server_up
 from .ai_worker import OllamaStreamWorker
 from .bridge import BridgeQt
 from .dialogs.connect_dialog import ConnectDialog
+from .dialogs.emoji_picker import pick_emoji
+from .dialogs.giphy_dialog import pick_gif
 from .dialogs.modes_dialog import ModesDialog
 from .dialogs.topic_dialog import TopicDialog
 from .widgets.composer import Composer
@@ -411,6 +413,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.sidebar.channelAction.connect(self._on_channel_action)
+        try:
+            self.sidebar.networkAction.connect(self._on_network_action)
+        except Exception:
+            pass
 
         # Chat view switched to QWebEngineView for rich HTML and inline media
         from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore
@@ -445,6 +451,12 @@ class MainWindow(QMainWindow):
         # Composer
         self.composer = Composer()
         self.composer.messageSubmitted.connect(self._on_submit)
+        # Emoji/GIF selectors
+        try:
+            self.composer.emojiRequested.connect(self._on_emoji_request)
+            self.composer.gifRequested.connect(self._on_gif_request)
+        except Exception:
+            pass
 
         # Members
         self.members = MembersView()
@@ -490,6 +502,12 @@ class MainWindow(QMainWindow):
             self._notify_tray = True
             self._notify_sound = True
         self._init_notifications()
+
+        # Reflect channel list updates from bridge into the sidebar
+        try:
+            self.bridge.channelsUpdated.connect(self._on_channels_updated)
+        except Exception:
+            pass
 
         # IRC Log dock
         self.log_view = QTextEdit(self)
@@ -1238,6 +1256,7 @@ class MainWindow(QMainWindow):
     # ----- Formatting helpers -----
     _URL_RE = re.compile(r"(https?://\S+)")
     _IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+    _VID_EXTS = (".mp4", ".webm", ".mov")
 
     def _youtube_id(self, url: str) -> str | None:
         try:
@@ -1254,24 +1273,41 @@ class MainWindow(QMainWindow):
 
     def _format_message_html(self, nick: str, text: str, ts: float | None = None) -> str:
         safe_text = text or ""
-        m = self._URL_RE.search(safe_text)
-        embed_html = ""
-        if m:
+        # Build embeds for all URLs and strip URLs from visible text
+        embeds: list[str] = []
+        embedded_urls: list[str] = []
+        for m in self._URL_RE.finditer(safe_text):
             url = m.group(1)
             low = url.lower()
             if any(low.endswith(ext) for ext in self._IMG_EXTS):
-                embed_html = f"<br><img src='{url}' style='border-radius: 8px;' data-msize='small'>"
-            else:
-                yid = self._youtube_id(url)
-                if yid:
-                    # Inline YouTube embed with default play button (no autoplay)
-                    embed_html = (
-                        "<br>"
-                        f"<iframe data-msize='small' width='560' height='315' src='https://www.youtube.com/embed/{yid}'"
-                        " title='YouTube video player' frameborder='0'"
-                        " allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture'"
-                        " allowfullscreen></iframe>"
-                    )
+                embeds.append(
+                    f"<br><img src='{url}' style='border-radius: 8px;' data-msize='small'>"
+                )
+                embedded_urls.append(url)
+                continue
+            if any(low.endswith(ext) for ext in self._VID_EXTS):
+                embeds.append(
+                    "<br>"
+                    f"<video data-msize='small' controls src='{url}' preload='metadata'></video>"
+                )
+                embedded_urls.append(url)
+                continue
+            yid = self._youtube_id(url)
+            if yid:
+                embeds.append(
+                    "<br>"
+                    f"<iframe data-msize='small' width='560' height='315' src='https://www.youtube.com/embed/{yid}'"
+                    " title='YouTube video player' frameborder='0'"
+                    " allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture'"
+                    " allowfullscreen></iframe>"
+                )
+                embedded_urls.append(url)
+        # Strip URLs from displayed text
+        display_text = safe_text
+        for u in embedded_urls:
+            display_text = display_text.replace(u, "")
+        display_text = re.sub(r"\s+", " ", display_text).strip()
+        embed_html = "".join(embeds)
         prefix = ""
         if getattr(self, "_show_timestamps", False):
             if ts is None:
@@ -1280,7 +1316,45 @@ class MainWindow(QMainWindow):
             prefix = f"<span class='ts'>[{t.tm_hour:02d}:{t.tm_min:02d}]</span> "
         color = self._nick_color(nick)
         nick_html = f"<span class='nick' style='--nick:{color}'>{nick}</span>"
-        return f"{prefix}{nick_html} <span class='msg-text'>{safe_text}</span>{embed_html}"
+        return f"{prefix}{nick_html} <span class='msg-text'>{display_text}</span>{embed_html}"
+
+    def _on_emoji_request(self) -> None:
+        try:
+            em = pick_emoji(self)
+            if em:
+                cur = self.composer.input.textCursor()
+                cur.insertText(em)
+                self.composer.input.setTextCursor(cur)
+                self.composer.input.setFocus()
+        except Exception:
+            pass
+
+    def _on_gif_request(self) -> None:
+        try:
+            try:
+                self.status.showMessage("Opening GIPHY…", 2000)
+            except Exception:
+                pass
+            url = pick_gif(self)
+            if url:
+                cur = self.composer.input.textCursor()
+                # Normalize to GIF if a Giphy MP4 was returned, so it embeds as an image
+                try:
+                    sel = url
+                    low = url.lower()
+                    if "giphy.com" in low and low.endswith(".mp4"):
+                        sel = url[:-4] + ".gif"
+                except Exception:
+                    sel = url
+                # Insert with surrounding spaces for safety
+                cur.insertText((" " if cur.position() else "") + sel + " ")
+                self.composer.input.setTextCursor(cur)
+                self.composer.input.setFocus()
+        except Exception as e:
+            try:
+                self.toast_host.show_toast(f"GIPHY error: {e}")
+            except Exception:
+                pass
 
     def _nick_color(self, nick: str) -> str:
         try:
@@ -3238,6 +3312,92 @@ class MainWindow(QMainWindow):
     def _clear_buffer(self) -> None:
         # Reset the chat document
         self._init_chat_webview()
+
+    def _on_channels_updated(self, labels: list[str]) -> None:
+        """Keep sidebar tree in sync with bridge channel list."""
+        try:
+            self._channel_labels = list(labels or [])
+            self.sidebar.set_channels(self._channel_labels)
+        except Exception:
+            pass
+        # Ensure current channel remains valid
+        try:
+            cur = self.bridge.current_channel() or ""
+            if cur and cur not in (self._channel_labels or []):
+                self.bridge.set_current_channel(
+                    self._channel_labels[0] if self._channel_labels else ""
+                )
+        except Exception:
+            pass
+
+    def _on_channel_action(self, ch: str, action: str) -> None:
+        action = (action or "").strip().lower()
+        ch = ch or ""
+        if not ch:
+            return
+        if action == "open log":
+            try:
+                self._open_logs_folder()
+            except Exception:
+                pass
+            return
+        if action in ("join",):
+            try:
+                self._schedule_async(self.bridge.joinChannel, ch)
+            except Exception:
+                pass
+            return
+        if action in ("part", "close"):
+            if ch.startswith("[AI:"):
+                try:
+                    if not hasattr(self, "_channel_labels"):
+                        self._channel_labels = []
+                    if ch in self._channel_labels:
+                        self._channel_labels.remove(ch)
+                        self.sidebar.set_channels(self._channel_labels)
+                except Exception:
+                    pass
+                # select a remaining channel if needed
+                try:
+                    cur = self.bridge.current_channel() or ""
+                    if cur == ch:
+                        self.bridge.set_current_channel(
+                            self._channel_labels[0] if self._channel_labels else ""
+                        )
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._schedule_async(self.bridge.partChannel, ch)
+                except Exception:
+                    pass
+            return
+        if action == "topic":
+            try:
+                txt, ok = QInputDialog.getText(self, "Set Topic", f"New topic for {ch}:", text="")
+                if ok:
+                    self._schedule_async(self.bridge.setTopic, ch, txt)
+            except Exception:
+                pass
+            return
+        if action == "modes":
+            try:
+                txt, ok = QInputDialog.getText(
+                    self, "Set Modes", f"Channel modes for {ch} (e.g. +i or +k key):", text=""
+                )
+                if ok and txt.strip():
+                    self._schedule_async(self.bridge.setModes, ch, txt.strip())
+            except Exception:
+                pass
+            return
+
+    def _on_network_action(self, net: str, action: str) -> None:
+        action = (action or "").strip().lower()
+        if action == "disconnect" and net:
+            try:
+                self._schedule_async(self.bridge.disconnectNetwork, net)
+            except Exception:
+                pass
 
     def _close_current_channel(self) -> None:
         cur = self.bridge.current_channel() or ""

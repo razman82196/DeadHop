@@ -13,6 +13,7 @@ class SidebarTree(QTreeWidget):
     channelSelected = pyqtSignal(str)
     channelAction = pyqtSignal(str, str)  # (channel, action)
     networkSelected = pyqtSignal(str)  # network name
+    networkAction = pyqtSignal(str, str)  # (network, action)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -142,8 +143,26 @@ class SidebarTree(QTreeWidget):
 
     def _open_menu(self, pos) -> None:
         item = self.itemAt(pos)
-        if not item or item.parent() is None:
+        if not item:
             return
+        # Top-level (network) context menu
+        if item.parent() is None:
+            # Identify network name
+            net = None
+            for name, root in self._nets.items():
+                if root is item:
+                    net = name
+                    break
+            if not net:
+                return
+            m = QMenu(self)
+            act_disc = m.addAction("Disconnect")
+            act_disc.triggered.connect(
+                lambda _=False, n=net: self.networkAction.emit(n, "Disconnect")
+            )
+            m.exec(self.viewport().mapToGlobal(pos))
+            return
+        # Channel item context menu
         ch = None
         for name, it in self._items.items():
             if it is item:

@@ -11,6 +11,8 @@ except Exception:  # optional dependency
 
 class Composer(QWidget):
     messageSubmitted = pyqtSignal(str)
+    emojiRequested = pyqtSignal()
+    gifRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -44,6 +46,42 @@ class Composer(QWidget):
             # Fallback for platforms without metrics
             self.input.setFixedHeight(68)
         layout.addWidget(self.input, 1)
+
+        # Emoji and GIF selector buttons
+        self.btnEmoji = QPushButton("😊", self)
+        self.btnEmoji.setToolTip("Insert emoji")
+        try:
+            f = self.btnEmoji.font()
+            f.setFamily("Segoe UI Emoji")
+            f.setPointSize(max(f.pointSize() + 6, 18))
+            self.btnEmoji.setFont(f)
+        except Exception:
+            pass
+        self.btnEmoji.setFixedSize(40, 40)
+        try:
+            self.btnEmoji.setStyleSheet("QPushButton{padding:0; border:none; font-size:24px;}")
+        except Exception:
+            pass
+        self.btnEmoji.clicked.connect(self.emojiRequested.emit)
+        layout.addWidget(self.btnEmoji, 0)
+
+        # Use a film frames emoji to represent GIF
+        self.btnGif = QPushButton("🎞️", self)
+        self.btnGif.setToolTip("Insert GIF from GIPHY")
+        try:
+            f2 = self.btnGif.font()
+            f2.setFamily("Segoe UI Emoji")
+            f2.setPointSize(max(f2.pointSize() + 6, 18))
+            self.btnGif.setFont(f2)
+        except Exception:
+            pass
+        self.btnGif.setFixedSize(40, 40)
+        try:
+            self.btnGif.setStyleSheet("QPushButton{padding:0; border:none; font-size:24px;}")
+        except Exception:
+            pass
+        self.btnGif.clicked.connect(self.gifRequested.emit)
+        layout.addWidget(self.btnGif, 0)
 
         self.btn = QPushButton("Send", self)
         self.btn.clicked.connect(self._submit)

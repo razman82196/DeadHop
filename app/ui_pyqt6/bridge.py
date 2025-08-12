@@ -68,6 +68,34 @@ class BridgeQt(QObject):
         """Convenience for hasCap('echo-message')."""
         return self.hasCap("echo-message")
 
+    @asyncSlot(str)
+    async def disconnectNetwork(self, net: str) -> None:
+        """Disconnect from a given network name and update channel list.
+
+        Net should match the key used in composite labels (typically the host).
+        """
+        if not net:
+            return
+        irc = self._ircs.get(net)
+        if not irc:
+            return
+        try:
+            await irc.close()
+        except Exception as e:
+            self.statusChanged.emit(f"[{net}] Disconnect failed: {e}")
+        # Remove network and its channels
+        try:
+            del self._ircs[net]
+        except Exception:
+            pass
+        # Filter out channels belonging to this net
+        self._all_channels = [c for c in self._all_channels if not c.startswith(f"{net}:")]
+        self.channelsUpdated.emit(list(self._all_channels))
+        # Adjust current channel if it belonged to the removed net
+        cur = self._current_channel or ""
+        if cur.startswith(f"{net}:"):
+            self.set_current_channel(self._all_channels[0] if self._all_channels else "")
+
     @asyncSlot(str, int, bool, str, str, str, list, str, str, bool)
     async def connectHost(
         self,
