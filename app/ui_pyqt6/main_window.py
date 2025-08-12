@@ -4,19 +4,20 @@ import shutil
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeySequence, QTextCursor, QCursor, QFont, QIcon, QTextDocument
+from PyQt6.QtGui import QKeySequence, QTextCursor, QCursor, QFont, QIcon, QTextDocument, QPalette
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QMainWindow, QDockWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QPushButton, QListWidget, QListWidgetItem, QLabel,
     QFileDialog, QMessageBox, QInputDialog, QToolBar, QMenuBar,
-    QMenu, QDialog, QDialogButtonBox, QCheckBox, QSplitter, QTextBrowser, QStatusBar,
-    QListWidget, QPushButton,
+    QMenu, QDialog, QDialogButtonBox, QCheckBox, QSplitter, QStatusBar,
+    QListWidget, QPushButton, QSystemTrayIcon,
 )
 from PyQt6.QtGui import QDesktopServices, QAction
 from PyQt6.QtCore import QUrl
 import asyncio
 import re
 import time
+import json
 from PyQt6.QtCore import QSettings, QByteArray, QSize, QUrl
 import asyncio
 import re
@@ -29,6 +30,7 @@ from .widgets.sidebar_tree import SidebarTree
 from .widgets.url_grabber import URLGrabber
 from .widgets.find_bar import FindBar
 from .widgets.friends_dock import FriendsDock
+from .widgets.video_panel import VideoPanel
 from .bridge import BridgeQt
 from .ai_worker import OllamaStreamWorker
 from ..ai.ollama import is_server_up
@@ -70,6 +72,113 @@ def _icon_from_fs(name: str) -> QIcon:
                     return QIcon(str(p))
     except Exception:
         pass
+
+    def _on_friends_changed(self, friends: list[str]) -> None:
+        """Persist friends, push to bridge MONITOR, and resync presence maps."""
+        try:
+            s = QSettings("DeadHop", "DeadHopClient")
+            s.setValue("friends", list(friends or []))
+        except Exception:
+            pass
+        # Update MONITOR list (async)
+        try:
+            self._schedule_async(self.bridge.setMonitorList, list(friends or []))
+        except Exception:
+            pass
+        # Trim avatar entries for removed friends (optional; keep non-friends avatars for members)
+        try:
+            # Keep as-is to allow member avatars even if not in friends
+            self.friends.set_avatars(self._avatar_map)
+        except Exception:
+            pass
+
+    def _on_avatars_changed(self, avatars: dict) -> None:
+        """Receive avatar map from FriendsDock and propagate to views + persist."""
+        try:
+            self._avatar_map = dict(avatars or {})
+            # Push to widgets
+            try:
+                self.friends.set_avatars(self._avatar_map)
+            except Exception:
+                pass
+            try:
+                self.members.set_avatars(self._avatar_map)
+            except Exception:
+                pass
+            # Persist
+            try:
+                s = QSettings("DeadHop", "DeadHopClient")
+                s.setValue("avatars", dict(self._avatar_map))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_monitor_online(self, nicks: list[str]) -> None:
+        if not nicks:
+            return
+        try:
+            self._online_set.update(n.strip() for n in nicks if n)
+            # Update views
+            try:
+                self.friends.set_presence(self._online_set)
+            except Exception:
+                pass
+            try:
+                self.members.set_presence(self._online_set)
+            except Exception:
+                pass
+            # Notifications
+            if getattr(self, "_notify_presence_online", True):
+                for n in nicks:
+                    msg = f"{n} is online"
+                    try:
+                        self.toast_host.show_toast(msg)
+                    except Exception:
+                        pass
+                    if getattr(self, "_notify_presence_system", True) and getattr(self, "tray", None):
+                        try:
+                            self.tray.showMessage("Friend online", msg, QSystemTrayIcon.MessageIcon.Information, 2500)
+                        except Exception:
+                            pass
+                    if getattr(self, "_notify_presence_sound", False):
+                        try:
+                            if self._sound_enabled and self._sound is not None:
+                                self._sound.play()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    def _on_monitor_offline(self, nicks: list[str]) -> None:
+        if not nicks:
+            return
+        try:
+            self._online_set.difference_update(n.strip() for n in nicks if n)
+            # Update views
+            try:
+                self.friends.set_presence(self._online_set)
+            except Exception:
+                pass
+            try:
+                self.members.set_presence(self._online_set)
+            except Exception:
+                pass
+            # Notifications
+            if getattr(self, "_notify_presence_offline", False):
+                for n in nicks:
+                    msg = f"{n} went offline"
+                    try:
+                        self.toast_host.show_toast(msg)
+                    except Exception:
+                        pass
+                    if getattr(self, "_notify_presence_system", True) and getattr(self, "tray", None):
+                        try:
+                            self.tray.showMessage("Friend offline", msg, QSystemTrayIcon.MessageIcon.Warning, 2500)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
     return QIcon()
 
 def get_icon(names: list[str] | tuple[str, ...], awesome_fallback: str | None = None) -> QIcon:
@@ -101,14 +210,31 @@ def get_icon(names: list[str] | tuple[str, ...], awesome_fallback: str | None = 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Peach Client (PyQt6)")
+        self.setWindowTitle("DeadHop")
         self.resize(1200, 800)
         self.bridge = BridgeQt()
+        # In-memory scrollback per channel/label -> list[HTML]
+        self._scrollback: dict[str, list[str]] = {}
+        self._scrollback_limit: int = 1000
+        # Filesystem location for persisted scrollback
+        try:
+            from PyQt6.QtCore import QStandardPaths
+            base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+        except Exception:
+            base = None
+        self._scrollback_dir = base
         # Notification preferences (defaults)
         self._notify_on_pm = True
         self._notify_on_mention = True
         self._notify_on_highlight = True
         self._notify_on_join_part = True
+        # Settings defaults (defensive init so closeEvent/_save_settings never crash)
+        self._current_theme: Optional[str] = None
+        self._word_wrap: bool = True
+        self._show_timestamps: bool = False
+        self._chat_font_family: Optional[str] = None
+        self._chat_font_size: Optional[int] = None
+        self._highlight_keywords: list[str] = []
         # Apply default theme (prefer qt-material; fallback to legacy theme manager if present)
         try:
             from PyQt6.QtWidgets import QApplication
@@ -130,6 +256,8 @@ class MainWindow(QMainWindow):
         self.logger = LogWriter()
         # Highlights and sounds
         self._highlight_keywords: list[str] = []  # defaults to nick later
+        # Our current nick (used for highlight detection); set on connect/nick events
+        self._my_nick: str = ""
         self._sound_enabled: bool = True
         try:
             from PyQt6.QtMultimedia import QSoundEffect
@@ -150,13 +278,42 @@ class MainWindow(QMainWindow):
         # Sidebar tree (Network > Channels)
         self.sidebar = SidebarTree()
         self.sidebar.channelSelected.connect(self._on_channel_clicked)
+        try:
+            # Optional: server node selection to show MOTD/status
+            self.sidebar.networkSelected.connect(self._on_network_selected)
+        except Exception:
+            pass
         self.sidebar.channelAction.connect(self._on_channel_action)
 
-        # Chat view (rich text for now)
-        self.chat = QTextBrowser()
-        self.chat.setOpenExternalLinks(True)
-        self.chat.setPlaceholderText("Welcome to Peach. Select a channel to start chatting…")
-
+        # Chat view switched to QWebEngineView for rich HTML and inline media
+        from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore
+        self.chat = QWebEngineView(self)
+        # Chat webview readiness and buffer for early messages
+        self._chat_ready: bool = False
+        self._chat_buf: list[str] = []
+        try:
+            self._init_chat_webview()
+        except Exception:
+            pass
+        # Inline video panel (YouTube)
+        self.video_panel = VideoPanel(self)
+        try:
+            self.video_panel.set_pop_handler(self._open_internal_browser)
+        except Exception:
+            pass
+        # Vertical splitter to host chat and video
+        self.split_chat = QSplitter(Qt.Orientation.Vertical)
+        self.split_chat.addWidget(self.chat)
+        self.split_chat.addWidget(self.video_panel)
+        self.split_chat.setStretchFactor(0, 1)
+        self.split_chat.setStretchFactor(1, 0)
+        # Start with video hidden; splitter will allocate most to chat
+        try:
+            self.video_panel.hide()
+            self.split_chat.setSizes([800, 0])
+        except Exception:
+            pass
+        
         # Composer
         self.composer = Composer()
         self.composer.messageSubmitted.connect(self._on_submit)
@@ -168,12 +325,17 @@ class MainWindow(QMainWindow):
         # Splitter layout
         self.split_lr = QSplitter(Qt.Orientation.Horizontal)
         self.split_lr.addWidget(self.sidebar)
-        self.split_lr.addWidget(self.chat)
+        self.split_lr.addWidget(self.split_chat)
         self.split_lr.addWidget(self.members)
         self.split_lr.setStretchFactor(0, 0)
         self.split_lr.setStretchFactor(1, 1)
         self.split_lr.setStretchFactor(2, 0)
         self.split_lr.setSizes([240, 800, 240])
+        # Ensure member context menu actions are handled
+        try:
+            self.members.memberAction.connect(self._on_member_action)
+        except Exception:
+            pass
 
         # Assemble center
         center = QWidget()
@@ -189,6 +351,17 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar(self)
         self.setStatusBar(self.status)
         self.toast_host = ToastHost(self)
+        # Notification preferences (default ON); load from QSettings
+        try:
+            s = QSettings("DeadHop", "DeadHopClient")
+            self._notify_toast: bool = bool(s.value("notify/toast", True, bool))
+            self._notify_tray: bool = bool(s.value("notify/tray", True, bool))
+            self._notify_sound: bool = bool(s.value("notify/sound", True, bool))
+        except Exception:
+            self._notify_toast = True
+            self._notify_tray = True
+            self._notify_sound = True
+        self._init_notifications()
 
         # IRC Log dock
         self.log_view = QTextEdit(self)
@@ -199,15 +372,37 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.log_dock)
         self.log_dock.hide()
 
+        # Ensure tray icon has a visible icon to avoid warnings
+        try:
+            if getattr(self, 'tray', None) is not None:
+                ic = self.windowIcon()
+                if ic.isNull():
+                    try:
+                        from PyQt6.QtWidgets import QStyle
+                        ic = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+                    except Exception:
+                        pass
+                if ic and not ic.isNull():
+                    self.tray.setIcon(ic)
+                    self.tray.setVisible(True)
+        except Exception:
+            pass
+
         # URL Grabber dock
         self.url_grabber = URLGrabber(self)
         self.url_dock = QDockWidget("URLs", self)
         self.url_dock.setWidget(self.url_grabber)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.url_dock)
+
+        # Quick toolbar (top-left): font slider + quick settings
+        try:
+            self._init_quick_toolbar()
+        except Exception:
+            pass
         self.url_dock.hide()
 
-        # Browser dock (integrated WebEngine) - created lazily
-        self.browser_dock: Optional[QDockWidget] = None
+        # Standalone in-app browser window (created lazily)
+        self.browser_window = None
 
         # Find bar dock
         self.find_bar = FindBar(self)
@@ -223,11 +418,64 @@ class MainWindow(QMainWindow):
         self.friends_dock.setWidget(self.friends)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.friends_dock)
         self.friends_dock.hide()
+        # Avatars and presence caches
+        self._avatar_map: dict[str, str | None] = {}
+        self._online_set: set[str] = set()
+        # React to friends/avatars edits
+        try:
+            self.friends.friendsChanged.connect(self._on_friends_changed)
+            # Persist avatars and reflect to members view
+            if hasattr(self.friends, 'avatarsChanged'):
+                self.friends.avatarsChanged.connect(self._on_avatars_changed)
+        except Exception:
+            pass
+        # System tray for presence notifications
+        try:
+            available = False
+            try:
+                available = QSystemTrayIcon.isSystemTrayAvailable()
+            except Exception:
+                # If the check fails, assume available and attempt best effort
+                available = True
+            if available:
+                self.tray = QSystemTrayIcon(self)
+                app_icon = get_icon(["app", "logo", "deadhop"]) if 'get_icon' in globals() else QIcon()
+                if not app_icon.isNull():
+                    self.tray.setIcon(app_icon)
+                # Basic tray setup: tooltip and visibility
+                try:
+                    self.tray.setToolTip("DeadHop")
+                except Exception:
+                    pass
+                # Context menu (Show / Hide / Quit)
+                try:
+                    menu = QMenu(self)
+                    act_show = QAction("Show", self)
+                    act_show.triggered.connect(self._show_from_tray)
+                    menu.addAction(act_show)
+                    act_hide = QAction("Hide", self)
+                    act_hide.triggered.connect(self._hide_from_tray)
+                    menu.addAction(act_hide)
+                    menu.addSeparator()
+                    act_quit = QAction("Quit", self)
+                    act_quit.triggered.connect(self._quit_from_tray)
+                    menu.addAction(act_quit)
+                    self.tray.setContextMenu(menu)
+                except Exception:
+                    pass
+                self.tray.setVisible(True)
+                # Click on tray icon focuses the window
+                try:
+                    self.tray.activated.connect(self._on_tray_activated)
+                except Exception:
+                    pass
+            else:
+                self.tray = None
+        except Exception:
+            self.tray = None
 
         # Servers dock (initialized on demand)
         self.servers_dock = None
-        # Browser dock (initialized on demand; keep None until created)
-        self.browser_dock = None
         # Track which saved server (by name) we connected to, for persistence
         self._current_server_name: str | None = None
         # AI routing defaults to avoid AttributeError before first use
@@ -238,6 +486,12 @@ class MainWindow(QMainWindow):
         self._channel_labels: list[str] = []
         self._unread: dict[str, int] = {}
         self._highlights: dict[str, int] = {}
+        # Per-network status/MOTD cache (list of recent lines)
+        self._status_by_net: dict[str, list[str]] = {}
+        # Per-network ISUPPORT (005) map
+        self._isupport_by_net: dict[str, dict[str, str]] = {}
+        # Prefer typed JOIN/PART/etc. events over raw parsing when available
+        self._typed_events: bool = True
 
         # Menus
         self._build_menus()
@@ -249,6 +503,32 @@ class MainWindow(QMainWindow):
         self.bridge.namesUpdated.connect(self._on_names)
         self.bridge.currentChannelChanged.connect(self._on_current_channel_changed)
         self.bridge.channelsUpdated.connect(self._on_channels_updated)
+        # Typed event wiring (JOIN/PART/QUIT/NICK/TOPIC/MODE)
+        try:
+            if hasattr(self.bridge, 'userJoined'):
+                self.bridge.userJoined.connect(self._on_user_joined)
+            if hasattr(self.bridge, 'userParted'):
+                self.bridge.userParted.connect(self._on_user_parted)
+            if hasattr(self.bridge, 'userQuit'):
+                self.bridge.userQuit.connect(self._on_user_quit)
+            if hasattr(self.bridge, 'userNickChanged'):
+                self.bridge.userNickChanged.connect(self._on_user_nick_changed)
+            if hasattr(self.bridge, 'channelTopic'):
+                self.bridge.channelTopic.connect(self._on_channel_topic)
+            if hasattr(self.bridge, 'channelMode'):
+                self.bridge.channelMode.connect(self._on_channel_mode)
+            if hasattr(self.bridge, 'channelModeUsers'):
+                self.bridge.channelModeUsers.connect(self._on_channel_mode_users)
+        except Exception:
+            pass
+        # Presence via MONITOR
+        try:
+            if hasattr(self.bridge, 'monitorOnline'):
+                self.bridge.monitorOnline.connect(self._on_monitor_online)
+            if hasattr(self.bridge, 'monitorOffline'):
+                self.bridge.monitorOffline.connect(self._on_monitor_offline)
+        except Exception:
+            pass
 
         # Apply saved settings and maybe autoconnect
         try:
@@ -264,12 +544,54 @@ class MainWindow(QMainWindow):
         # Unread/highlight counters
         self._unread: dict[str, int] = {}
         self._highlights: dict[str, int] = {}
+        # Cache of NAMES per composite channel label (e.g. "net:#chan")
+        self._names_by_channel: dict[str, list[str]] = {}
         # Apply global rounded corners styling overlay
         try:
             self._apply_rounded_corners(8)
         except Exception:
             pass
         # 
+
+    def _maybe_migrate_qsettings(self) -> None:
+        """Copy settings from legacy Peach/PeachClient to DeadHop/DeadHopClient once.
+        Safe and idempotent: uses a marker key to avoid repeated work.
+        """
+        new = QSettings("DeadHop", "DeadHopClient")
+        try:
+            if new.value("migrated_from_peach", False, type=bool):
+                return
+        except Exception:
+            # If marker cannot be read, proceed best effort
+            pass
+        old = QSettings("Peach", "PeachClient")
+        try:
+            keys = list(old.allKeys() or [])
+        except Exception:
+            keys = []
+        if not keys:
+            # Nothing to migrate
+            try:
+                new.setValue("migrated_from_peach", True)
+            except Exception:
+                pass
+            return
+        # Copy keys that don't already exist in new namespace
+        for k in keys:
+            try:
+                if hasattr(new, "contains") and new.contains(k):
+                    continue
+            except Exception:
+                # If contains() unavailable/raises, still attempt a best-effort write
+                pass
+            try:
+                new.setValue(k, old.value(k))
+            except Exception:
+                pass
+        try:
+            new.setValue("migrated_from_peach", True)
+        except Exception:
+            pass
 
     def _schedule_async(self, func, *args, **kwargs) -> None:
         """Schedule a callable; if it returns a coroutine, create a task."""
@@ -291,6 +613,11 @@ class MainWindow(QMainWindow):
 
     # ----- Member actions -----
     def _on_member_action(self, nick: str, action: str) -> None:
+        # Sanitize nick from list labels that may include status prefix
+        try:
+            nick = str(nick or "").lstrip('~&@%+ ').strip()
+        except Exception:
+            pass
         action = action.lower()
         if action == "whois":
             # Try to send raw WHOIS if bridge supports it
@@ -305,7 +632,10 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
             if not sent:
-                self.chat.append(f"<i>WHOIS {nick} (not sent: no raw command API)</i>")
+                try:
+                    self._chat_append(f"<i>WHOIS {nick} (not sent: no raw command API)</i>")
+                except Exception:
+                    pass
         elif action == "query":
             label = f"[PM:{nick}]"
             # Ensure PM label exists in sidebar without wiping existing channels
@@ -354,42 +684,28 @@ class MainWindow(QMainWindow):
                     self.toast_host.show_toast("Ban not implemented in bridge")
         elif action == "op":
             ch = self.bridge.current_channel() or ""
-            sent = False
-            for meth, cmd in (("setModes", None), ("sendRaw", f"MODE {ch} +o {nick}"), ("sendCommand", f"MODE {ch} +o {nick}")):
-                fn = getattr(self.bridge, meth, None)
-                if callable(fn):
-                    try:
-                        fn(ch, "+o " + nick) if cmd is None else fn(cmd)
-                        sent = True
-                        break
-                    except Exception:
-                        pass
-            if not sent:
-                self.toast_host.show_toast("Op not implemented in bridge")
+            try:
+                self._schedule_async(self.bridge.setModes, ch, "+o " + nick)
+            except Exception:
+                self._send_raw(f"MODE {ch} +o {nick}")
         elif action == "deop":
             ch = self.bridge.current_channel() or ""
-            sent = False
-            for meth, cmd in (("setModes", None), ("sendRaw", f"MODE {ch} -o {nick}"), ("sendCommand", f"MODE {ch} -o {nick}")):
-                fn = getattr(self.bridge, meth, None)
-                if callable(fn):
-                    try:
-                        fn(ch, "-o " + nick) if cmd is None else fn(cmd)
-                        sent = True
-                        break
-                    except Exception:
-                        pass
-            if not sent:
-                self.toast_host.show_toast("Deop not implemented in bridge")
+            try:
+                self._schedule_async(self.bridge.setModes, ch, "-o " + nick)
+            except Exception:
+                self._send_raw(f"MODE {ch} -o {nick}")
         elif action == "add friend":
-            # Add to friends list and persist
             try:
                 current = [self.friends.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.friends.list.count())]
                 if nick not in current:
                     current.append(nick)
                     self.friends.set_friends(current)
-                    self.bridge.setMonitorList(current)
                     try:
-                        s = QSettings("Peach", "PeachClient")
+                        self._schedule_async(self.bridge.setMonitorList, current)
+                    except Exception:
+                        pass
+                    try:
+                        s = QSettings("DeadHop", "DeadHopClient")
                         s.setValue("friends", current)
                     except Exception:
                         pass
@@ -398,422 +714,6 @@ class MainWindow(QMainWindow):
                 pass
         else:
             self.toast_host.show_toast(f"Action '{action}' for {nick} not yet implemented")
-
-    # ----- Find in buffer -----
-    def _on_find(self, pattern: str, forward: bool) -> None:
-        if not pattern:
-            return
-        flags = QTextDocument.FindFlag(0) if forward else QTextDocument.FindFlag.FindBackward
-        try:
-            self.chat.find(pattern, flags)
-        except Exception:
-            # Fallback: simple contains -> move cursor to end/start
-            c = self.chat.textCursor()
-            if forward:
-                c.movePosition(c.MoveOperation.End)
-            else:
-                c.movePosition(c.MoveOperation.Start)
-            self.chat.setTextCursor(c)
-
-    def _open_find_panel(self) -> None:
-        try:
-            self.find_dock.show()
-            self.find_dock.raise_()
-            # focus the input
-            try:
-                self.find_bar.edit.setFocus()
-                self.find_bar.edit.selectAll()
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-    # ----- Utilities -----
-    def _strip_irc_codes(self, s: str) -> str:
-        """Remove IRC control codes (color/bold/underline/reverse/reset) and CTCP wrappers."""
-        if not s:
-            return s
-        try:
-            # Strip CTCP \x01 wrappers
-            if s.startswith("\x01") and s.endswith("\x01"):
-                s = s.strip("\x01")
-            # mIRC color code: \x03([0-9]{1,2})(,[0-9]{1,2})?
-            s = re.sub(r"\x03(\d{1,2})(,\d{1,2})?", "", s)
-            # Remove formatting control chars: bold(\x02), italic(\x1D), underline(\x1F), reverse(\x16), reset(\x0F)
-            s = s.replace("\x02", "").replace("\x1D", "").replace("\x1F", "").replace("\x16", "").replace("\x0F", "")
-            return s
-        except Exception:
-            return s
-
-    def _build_menus(self) -> None:
-        menubar = self.menuBar()
-
-        # File
-        file_menu = menubar.addMenu("&File")
-        act_open_logs = QAction("Open Logs Folder", self)
-        act_open_logs.setIcon(get_icon(["logs", "folder", "folder-open"], awesome_fallback="fa5s.folder-open"))
-        act_open_logs.triggered.connect(self._open_logs_folder)
-        file_menu.addAction(act_open_logs)
-        file_menu.addSeparator()
-        act_exit = QAction("E&xit", self)
-        act_exit.setShortcut(QKeySequence.StandardKey.Quit)
-        act_exit.setIcon(get_icon(["exit", "quit", "power"], awesome_fallback="fa5s.power-off"))
-        act_exit.triggered.connect(self.close)
-        file_menu.addAction(act_exit)
-
-        # View
-        view_menu = menubar.addMenu("&View")
-
-        # Appearance (themes, fonts, transparency, radius)
-        appearance_menu = view_menu.addMenu("Appearance")
-        # Theme actions with two-way sync
-        from PyQt6.QtGui import QActionGroup
-        self._theme_actions: dict[str, QAction] = {}
-        self._theme_group = QActionGroup(self)
-        self._theme_group.setExclusive(True)
-        if _theme_manager is not None:
-            act_tm_dark = QAction("Material Dark", self, checkable=True)
-            act_tm_light = QAction("Material Light", self, checkable=True)
-            act_tm_dark.triggered.connect(lambda: self._apply_theme("Material Dark"))
-            act_tm_light.triggered.connect(lambda: self._apply_theme("Material Light"))
-            self._theme_group.addAction(act_tm_dark)
-            self._theme_group.addAction(act_tm_light)
-            appearance_menu.addActions([act_tm_dark, act_tm_light])
-            self._theme_actions["Material Dark"] = act_tm_dark
-            self._theme_actions["Material Light"] = act_tm_light
-        try:
-            import qt_material  # noqa: F401
-            qtmat_menu = appearance_menu.addMenu("Qt Material Presets")
-            presets = (
-                "indigo_dark", "indigo_light",
-                "teal_dark", "teal_light",
-                "cyan_dark", "cyan_light",
-                "blue_dark", "blue_light",
-                "purple_dark", "purple_light",
-                "deep_purple_dark", "deep_purple_light",
-                "amber_dark", "amber_light",
-                "red_dark", "red_light",
-            )
-            for name in presets:
-                title = name.replace("_", " ").title()
-                a = QAction(title, self, checkable=True)
-                a.triggered.connect(lambda _, n=name: self._apply_qt_material(n))
-                self._theme_group.addAction(a)
-                qtmat_menu.addAction(a)
-                self._theme_actions[name] = a
-        except Exception:
-            pass
-        act_font = QAction("Choose Font…", self)
-        act_font.triggered.connect(self._choose_font)
-        appearance_menu.addAction(act_font)
-        transp_menu = appearance_menu.addMenu("Transparency")
-        for pct in (100, 95, 90, 85, 80):
-            a = QAction(f"{pct}%", self)
-            a.triggered.connect(lambda _, p=pct: self.setWindowOpacity(p/100.0))
-            transp_menu.addAction(a)
-        radius_menu = appearance_menu.addMenu("Corner Radius")
-        for r in (0, 4, 8, 12, 16):
-            a = QAction(f"{r}px", self)
-            a.triggered.connect(lambda _, rv=r: self._set_corner_radius(rv))
-            radius_menu.addAction(a)
-
-        # Panels (toggle docks)
-        panels_menu = view_menu.addMenu("Panels")
-        # Built-in toggle actions from docks
-        a_log = self.log_dock.toggleViewAction()
-        a_log.setShortcut(QKeySequence("Ctrl+L"))
-        a_urls = self.url_dock.toggleViewAction()
-        a_urls.setShortcut(QKeySequence("Ctrl+U"))
-        a_friends = self.friends_dock.toggleViewAction()
-        a_friends.setShortcut(QKeySequence("Ctrl+Shift+F"))
-        panels_menu.addActions([a_log, a_urls, a_friends])
-        # Find panel opener (focuses search)
-        act_find = QAction("Find…", self)
-        act_find.setShortcut(QKeySequence.StandardKey.Find)
-        act_find.setIcon(get_icon(["find", "search"], awesome_fallback="fa5s.search"))
-        act_find.triggered.connect(self._open_find_panel)
-        panels_menu.addAction(act_find)
-        # Browser panel toggle (lazy create)
-        act_browser_panel = QAction("Browser", self)
-        act_browser_panel.setIcon(get_icon(["browser", "globe", "web"], awesome_fallback="fa5s.globe"))
-        act_browser_panel.setShortcut(QKeySequence("Ctrl+B"))
-        act_browser_panel.triggered.connect(self._toggle_browser_panel)
-        panels_menu.addAction(act_browser_panel)
-
-        # Word wrap and timestamps toggles in Appearance
-        self.act_wrap = QAction("Word Wrap", self, checkable=True)
-        self.act_wrap.toggled.connect(self._set_word_wrap)
-        appearance_menu.addAction(self.act_wrap)
-        self.act_timestamps = QAction("Show Timestamps", self, checkable=True)
-        self.act_timestamps.toggled.connect(self._set_timestamps)
-        appearance_menu.addAction(self.act_timestamps)
-
-        # Tools
-        tools_menu = menubar.addMenu("&Tools")
-        act_plugins = QAction("Plugins…", self)
-        act_plugins.setIcon(get_icon(["plugins", "puzzle"], awesome_fallback="fa5s.puzzle-piece"))
-        act_plugins.triggered.connect(self._open_plugins_folder)
-        tools_menu.addAction(act_plugins)
-        # Internal Browser panel
-        act_reset_profile = QAction("Reset Browser Profile…", self)
-        act_reset_profile.setIcon(get_icon(["reset", "refresh", "broom"], awesome_fallback="fa5s.trash"))
-        act_reset_profile.triggered.connect(self._reset_browser_profile)
-        tools_menu.addAction(act_reset_profile)
-        act_browser = QAction("Browser Panel", self)
-        act_browser.setIcon(get_icon(["browser", "globe", "earth"], awesome_fallback="fa5s.globe"))
-        act_browser.triggered.connect(self._toggle_browser_panel)
-        tools_menu.addAction(act_browser)
-        # Import cookies for current site
-        act_cookies = QAction("Import Cookies for Site", self)
-        act_cookies.setIcon(get_icon(["cookie", "cookies"], awesome_fallback="fa5s.cookie-bite"))
-        act_cookies.triggered.connect(self._import_system_cookies_for_current_site)
-        tools_menu.addAction(act_cookies)
-        # Settings dialog
-        act_settings = QAction("Settings…", self)
-        act_settings.setIcon(get_icon(["settings", "cog", "gear"], awesome_fallback="fa5s.cog"))
-        act_settings.triggered.connect(self._open_settings_dialog)
-        tools_menu.addAction(act_settings)
-        # Toggle Browser dock from Tools
-        act_browser_tools = QAction("Toggle Browser Panel", self)
-        act_browser_tools.setIcon(get_icon(["browser", "globe", "web"], awesome_fallback="fa5s.globe"))
-        act_browser_tools.setShortcut(QKeySequence("Ctrl+B"))
-        act_browser_tools.triggered.connect(self._toggle_browser_panel)
-        tools_menu.addAction(act_browser_tools)
-        # Import cookies from system browsers for current site (keep under Tools)
-        act_import_cookies = QAction("Import System Cookies…", self)
-        act_import_cookies.setIcon(get_icon(["cookies", "cookie"], awesome_fallback="fa5s.cookie-bite"))
-        act_import_cookies.triggered.connect(self._import_system_cookies_for_current_site)
-        tools_menu.addAction(act_import_cookies)
-        # AI submenu under Tools
-        ai_menu = tools_menu.addMenu("AI")
-        act_ai_start = QAction("Start AI Chat…", self)
-        act_ai_start.setIcon(get_icon(["ai", "robot"], awesome_fallback="mdi6.robot"))
-        act_ai_start.triggered.connect(self._start_ai_chat)
-        ai_menu.addAction(act_ai_start)
-        act_ai_route = QAction("Route AI Output…", self)
-        act_ai_route.setIcon(get_icon(["route", "arrow-right", "ai"], awesome_fallback="fa5s.location-arrow"))
-        act_ai_route.triggered.connect(self._choose_ai_route_target)
-        ai_menu.addAction(act_ai_route)
-        self.act_ai_route_stop = QAction("Stop AI Output Routing", self)
-        self.act_ai_route_stop.setIcon(get_icon(["stop", "square"], awesome_fallback="fa5s.stop"))
-        self.act_ai_route_stop.triggered.connect(self._stop_ai_route)
-        self.act_ai_route_stop.setEnabled(False)
-        ai_menu.addAction(self.act_ai_route_stop)
-
-        # Chat submenu under Tools
-        chat_menu = tools_menu.addMenu("Chat")
-        # Global shortcuts
-        act_clear = QAction("Clear Buffer", self)
-        act_clear.setShortcut(QKeySequence("Ctrl+K"))
-        act_clear.setIcon(get_icon(["clear", "broom", "eraser"], awesome_fallback="fa5s.eraser"))
-        act_clear.triggered.connect(self._clear_buffer)
-        self.addAction(act_clear)
-        chat_menu.addAction(act_clear)
-        act_close = QAction("Close Current Channel", self)
-        act_close.setShortcut(QKeySequence("Ctrl+W"))
-        act_close.setIcon(get_icon(["close", "times", "x"], awesome_fallback="fa5s.times"))
-        act_close.triggered.connect(self._close_current_channel)
-        self.addAction(act_close)
-        chat_menu.addAction(act_close)
-
-        # Servers menu (manage saved servers)
-        servers_menu = menubar.addMenu("&Servers")
-        act_srv_panel = QAction("Servers Panel", self)
-        act_srv_panel.triggered.connect(self._toggle_servers_panel)
-        servers_menu.addAction(act_srv_panel)
-        servers_menu.addSeparator()
-        act_srv_connect = QAction("Connect to…", self)
-        act_srv_connect.triggered.connect(self._servers_connect)
-        servers_menu.addAction(act_srv_connect)
-        servers_menu.addSeparator()
-        act_srv_add = QAction("Add Server…", self)
-        act_srv_add.triggered.connect(self._servers_add)
-        act_srv_edit = QAction("Edit Server…", self)
-        act_srv_edit.triggered.connect(self._servers_edit)
-        act_srv_del = QAction("Delete Server…", self)
-        act_srv_del.triggered.connect(self._servers_delete_prompt)
-        servers_menu.addActions([act_srv_add, act_srv_edit, act_srv_del])
-        servers_menu.addSeparator()
-        act_srv_auto = QAction("Set Auto-connect…", self)
-        act_srv_auto.triggered.connect(self._servers_set_autoconnect)
-        servers_menu.addAction(act_srv_auto)
-        act_srv_tls_ignore = QAction("Set Ignore Invalid Certs…", self)
-        act_srv_tls_ignore.triggered.connect(self._servers_set_ignore_invalid_certs)
-        servers_menu.addAction(act_srv_tls_ignore)
-
-        # Help
-        help_menu = menubar.addMenu("&Help")
-        act_about = QAction("About", self)
-        act_about.setIcon(get_icon(["about", "info"], awesome_fallback="fa5s.info-circle"))
-        act_about.triggered.connect(lambda: self.toast_host.show_toast("Peach PyQt6 UI"))
-        help_menu.addAction(act_about)
-
-        # Notifications submenu under Tools (merged)
-        notif_menu = tools_menu.addMenu("Notifications")
-        act_toggle_sound = QAction("Enable Sound", self, checkable=True)
-        act_toggle_sound.setChecked(True)
-        act_toggle_sound.setIcon(get_icon(["sound", "bell"], awesome_fallback="fa5s.bell"))
-        act_toggle_sound.toggled.connect(self._set_sound_enabled)
-        notif_menu.addAction(act_toggle_sound)
-        act_highlight_words = QAction("Set Highlight Words…", self)
-        act_highlight_words.setIcon(get_icon(["highlight", "marker", "edit"], awesome_fallback="fa5s.highlighter"))
-        act_highlight_words.triggered.connect(self._edit_highlight_words)
-        notif_menu.addAction(act_highlight_words)
-        act_notif_cfg = QAction("Configure…", self)
-        act_notif_cfg.setIcon(get_icon(["notifications", "bell", "settings"], awesome_fallback="fa5s.cog"))
-        act_notif_cfg.triggered.connect(self._open_notifications_settings)
-        notif_menu.addAction(act_notif_cfg)
-
-    
-
-    def _toggle_browser_panel(self) -> None:
-        self._ensure_browser_dock()
-        if not self.browser_dock:
-            return
-        vis = not self.browser_dock.isVisible()
-        self.browser_dock.setVisible(vis)
-        if vis:
-            self.browser_dock.raise_()
-            self.browser_dock.activateWindow()
-
-    def _open_plugins_folder(self) -> None:
-        try:
-            base = Path(__file__).resolve().parents[2] / "plugins"
-            base.mkdir(parents=True, exist_ok=True)
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(base)))
-        except Exception as e:
-            self.toast_host.show_toast(f"Open plugins folder failed: {e}")
-
-    def _open_notifications_settings(self) -> None:
-        # Simple dialog with checkboxes persisted to QSettings
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Notification Settings")
-        lay = QVBoxLayout(dlg)
-        cb_pm = QCheckBox("Notify on private messages (PM)")
-        cb_mention = QCheckBox("Notify on @mentions (your nick)")
-        cb_hl = QCheckBox("Notify on highlight words")
-        cb_joinpart = QCheckBox("Notify on joins/parts")
-        # Load from settings
-        try:
-            s = QSettings("Peach", "PeachClient")
-            cb_pm.setChecked(s.value("notifications/pm", self._notify_on_pm, type=bool))
-            cb_mention.setChecked(s.value("notifications/mention", self._notify_on_mention, type=bool))
-            cb_hl.setChecked(s.value("notifications/highlight", self._notify_on_highlight, type=bool))
-            cb_joinpart.setChecked(s.value("notifications/join_part", self._notify_on_join_part, type=bool))
-        except Exception:
-            cb_pm.setChecked(self._notify_on_pm)
-            cb_mention.setChecked(self._notify_on_mention)
-            cb_hl.setChecked(self._notify_on_highlight)
-            cb_joinpart.setChecked(self._notify_on_join_part)
-        for cb in (cb_pm, cb_mention, cb_hl, cb_joinpart):
-            lay.addWidget(cb)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        lay.addWidget(btns)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        if dlg.exec() == dlg.DialogCode.Accepted:
-            self._notify_on_pm = cb_pm.isChecked()
-            self._notify_on_mention = cb_mention.isChecked()
-            self._notify_on_highlight = cb_hl.isChecked()
-            self._notify_on_join_part = cb_joinpart.isChecked()
-            try:
-                s = QSettings("Peach", "PeachClient")
-                s.setValue("notifications/pm", self._notify_on_pm)
-                s.setValue("notifications/mention", self._notify_on_mention)
-                s.setValue("notifications/highlight", self._notify_on_highlight)
-                s.setValue("notifications/join_part", self._notify_on_join_part)
-            except Exception:
-                pass
-
-    # ----- Servers dock -----
-    def _ensure_servers_dock(self) -> None:
-        if getattr(self, 'servers_dock', None) is None:
-            try:
-                dock = QDockWidget("Servers", self)
-                dock.setObjectName("ServersDock")
-                # Build contents
-                container = QWidget(dock)
-                v = QVBoxLayout(container)
-                v.setContentsMargins(6, 6, 6, 6)
-                lst = QListWidget(container)
-                self.servers_list_widget = lst
-                v.addWidget(lst)
-                # Buttons row
-                row = QHBoxLayout()
-                btn_connect = QPushButton("Connect", container)
-                btn_add = QPushButton("Add", container)
-                btn_edit = QPushButton("Edit", container)
-                btn_del = QPushButton("Delete", container)
-                btn_auto = QPushButton("Set Auto", container)
-                btn_ignore = QPushButton("Toggle Ignore Certs", container)
-                for b in (btn_connect, btn_add, btn_edit, btn_del, btn_auto, btn_ignore):
-                    row.addWidget(b)
-                v.addLayout(row)
-                container.setLayout(v)
-                dock.setWidget(container)
-                self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
-                self.servers_dock = dock
-                # Disallow floating
-                try:
-                    feats = dock.features()
-                    from PyQt6.QtWidgets import QDockWidget as _QDock
-                    dock.setFeatures(feats & ~_QDock.DockWidgetFeature.DockWidgetFloatable)
-                except Exception:
-                    pass
-                # Wire buttons
-                btn_connect.clicked.connect(self._servers_panel_connect)
-                btn_add.clicked.connect(self._servers_add)
-                btn_edit.clicked.connect(self._servers_panel_edit)
-                btn_del.clicked.connect(self._servers_panel_delete)
-                btn_auto.clicked.connect(self._servers_panel_set_auto)
-                btn_ignore.clicked.connect(self._servers_panel_toggle_ignore)
-                # Populate
-                self._refresh_servers_list()
-                dock.hide()
-            except Exception:
-                self.servers_dock = None
-
-    def _refresh_servers_list(self) -> None:
-        try:
-            if not hasattr(self, 'servers_list_widget'):
-                return
-            lst = self.servers_list_widget
-            lst.clear()
-            for name in self._servers_list():
-                lst.addItem(name)
-        except Exception:
-            pass
-
-    def _selected_server_name(self) -> str | None:
-        try:
-            lst = getattr(self, 'servers_list_widget', None)
-            if not lst:
-                return None
-            it = lst.currentItem()
-            return it.text() if it else None
-        except Exception:
-            return None
-
-    def _toggle_servers_panel(self) -> None:
-        self._ensure_servers_dock()
-        if not self.servers_dock:
-            return
-        if self.servers_dock.isVisible():
-            self.servers_dock.hide()
-        else:
-            self._refresh_servers_list()
-            self.servers_dock.show()
-            try:
-                self.servers_dock.raise_()
-            except Exception:
-                pass
-
-    # Panel actions operating on selection
-    def _servers_panel_connect(self) -> None:
-        name = self._selected_server_name()
-        if not name:
-            return
-        self._servers_connect_name(name)
 
     def _servers_panel_edit(self) -> None:
         name = self._selected_server_name()
@@ -857,16 +757,16 @@ class MainWindow(QMainWindow):
         try:
             # track last TLS choice
             self._last_connect_tls = bool(tls)
-            self._schedule_async(self.bridge.connectHost, host, port, tls, nick, user, realname, chans, password, sasl_user, bool(ignore))
+            self._schedule_async(self.bridge.connectHost, host, port, tls, nick or self._default_nick(), user, realname, chans, password, sasl_user, bool(ignore))
             if getattr(self, "_auto_negotiate", True):
-                self._schedule_async(self._negotiate_on_connect, host, nick, user, password, sasl_user)
+                self._schedule_async(self._negotiate_on_connect, host, nick or self._default_nick(), user, password, sasl_user)
             self.status.showMessage(f"Connecting to {host}:{port}…", 2000)
-            self._my_nick = nick
+            self._my_nick = nick or self._default_nick()
         except Exception:
             try:
-                self.bridge.connectHost(host, port, tls, nick, user, realname, chans, password, sasl_user, bool(ignore))
+                self.bridge.connectHost(host, port, tls, nick or self._default_nick(), user, realname, chans, password, sasl_user, bool(ignore))
                 if getattr(self, "_auto_negotiate", True):
-                    self._schedule_async(self._negotiate_on_connect, host, nick, user, password, sasl_user)
+                    self._schedule_async(self._negotiate_on_connect, host, nick or self._default_nick(), user, password, sasl_user)
             except Exception:
                 pass
 
@@ -894,86 +794,68 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"Ignore invalid certs: {'Yes' if not ignore else 'No'} for {name}", 1500)
 
     def _show_browser_panel(self) -> None:
-        self._ensure_browser_dock()
-        if not self.browser_dock:
+        self._ensure_browser_window()
+        if not self.browser_window:
             return
-        self.browser_dock.show()
         try:
-            self.browser_dock.raise_()
+            self.browser_window.show()
+            self.browser_window.raise_()
+            self.browser_window.activateWindow()
         except Exception:
             pass
 
     def _import_system_cookies_for_current_site(self) -> None:
         try:
-            self._ensure_browser_dock()
-            if not self.browser_dock:
+            self._ensure_browser_window()
+            if not self.browser_window:
                 self.toast_host.show_toast("Browser panel unavailable")
                 return
-            url = self.browser_dock.view.url()
+            url = self.browser_window.view.url()
             host = url.host()
             if not host:
                 self.toast_host.show_toast("Open a site in the Browser first")
                 return
             # Import cookies for this domain
-            n = self.browser_dock.import_cookies_from_system(domain=host)
+            n = self.browser_window.import_cookies_from_system(domain=host)
             if n > 0:
                 self.status.showMessage(f"Imported {n} cookies for {host}", 2500)
                 # Reload to apply
-                self.browser_dock.view.reload()
+                self.browser_window.view.reload()
             else:
                 self.toast_host.show_toast("No cookies imported (install browser-cookie3?)")
         except Exception:
             self.toast_host.show_toast("Cookie import failed")
 
-    def _ensure_browser_dock(self) -> None:
-        if self.browser_dock is None:
+    def _ensure_browser_window(self) -> None:
+        if self.browser_window is None:
             try:
-                # Lazy import to avoid circular import with browser_dock -> main_window
-                from .widgets.browser_dock import BrowserDock
-                bd = BrowserDock(self)
-                self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, bd)
-                bd.hide()
-                self.browser_dock = bd
+                from .widgets.browser_window import BrowserWindow
+                self.browser_window = BrowserWindow(self)
             except Exception:
-                self.browser_dock = None
-        # Force docked state if it exists
-        try:
-            if self.browser_dock and hasattr(self.browser_dock, "setFloating"):
-                self.browser_dock.setFloating(False)
-            # Disallow floating to avoid separate window popping
-            if self.browser_dock:
-                feats = self.browser_dock.features()
-                from PyQt6.QtWidgets import QDockWidget
-                self.browser_dock.setFeatures(feats & ~QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        except Exception:
-            pass
+                self.browser_window = None
 
     def _reset_browser_profile(self) -> None:
-        """Delete the persistent internal browser profile and reset the dock.
+        """Delete the persistent internal browser profile and reset the browser.
 
         Closes and destroys the current browser dock (if any), removes the
         profile directory at app/resources/qtweb/browser, and defers
         re-creation until the browser panel is next requested.
         """
-        # 1) Close/hide and remove the dock safely
+        # 1) Close/hide the window safely
         try:
-            if self.browser_dock is not None:
+            if self.browser_window is not None:
                 try:
-                    self.browser_dock.hide()
+                    self.browser_window.hide()
                 except Exception:
                     pass
                 try:
-                    self.removeDockWidget(self.browser_dock)
+                    self.browser_window.deleteLater()
                 except Exception:
                     pass
-                try:
-                    self.browser_dock.deleteLater()
-                except Exception:
-                    pass
-                self.browser_dock = None
+                self.browser_window = None
         except Exception:
             pass
-        # 2) Remove the persistent profile dir used by BrowserDock
+        # 2) Remove the persistent profile dir used by the in-app browser
         try:
             base = Path(__file__).resolve().parents[1] / "resources" / "qtweb" / "browser"
             # Best-effort removal (profile should be closed from step 1)
@@ -994,19 +876,127 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def _show_browser_panel(self) -> None:
-        self._ensure_browser_dock()
-        if self.browser_dock:
-            self.browser_dock.show()
-
     def _toggle_browser_panel(self) -> None:
-        self._ensure_browser_dock()
-        if not self.browser_dock:
+        self._ensure_browser_window()
+        if not self.browser_window:
             return
-        if self.browser_dock.isVisible():
-            self.browser_dock.hide()
+        if self.browser_window.isVisible():
+            self.browser_window.hide()
         else:
-            self.browser_dock.show()
+            self.browser_window.show()
+
+    def _open_internal_browser(self, url: str | QUrl) -> None:
+        """Open a URL in the in-app browser window."""
+        try:
+            self._ensure_browser_window()
+            if self.browser_window:
+                self.browser_window.open_url(url)
+        except Exception:
+            pass
+
+    def _build_menus(self) -> None:
+        """Build full menu bar: File, Servers, View, Tools, Help."""
+        try:
+            mb = self.menuBar()
+            mb.clear()
+
+            # File
+            m_file = mb.addMenu("&File")
+            a_connect = m_file.addAction("&Connect…")
+            a_connect.setShortcut(QKeySequence.StandardKey.AddTab)
+            a_connect.triggered.connect(self._open_connect_dialog)
+            m_file.addSeparator()
+            a_quit = m_file.addAction("E&xit")
+            a_quit.setShortcut(QKeySequence.StandardKey.Quit)
+            try:
+                a_quit.triggered.connect(self.close)
+            except Exception:
+                pass
+
+            # Servers
+            m_srv = mb.addMenu("&Servers")
+            a_srv_add = m_srv.addAction("&Add…")
+            a_srv_add.triggered.connect(self._servers_add)
+            a_srv_edit = m_srv.addAction("&Edit…")
+            a_srv_edit.triggered.connect(self._servers_edit)
+            a_srv_delete = m_srv.addAction("&Delete…")
+            a_srv_delete.triggered.connect(self._servers_delete_prompt)
+            m_srv.addSeparator()
+            a_srv_connect = m_srv.addAction("&Connect to Saved…")
+            a_srv_connect.setShortcut(QKeySequence("Ctrl+Shift+C"))
+            a_srv_connect.triggered.connect(self._servers_connect)
+            a_srv_autoc = m_srv.addAction("Set &Auto-connect…")
+            a_srv_autoc.triggered.connect(self._servers_set_autoconnect)
+            a_srv_ignore = m_srv.addAction("Ignore Invalid &Certs…")
+            a_srv_ignore.triggered.connect(self._servers_set_ignore_invalid_certs)
+
+            # View
+            m_view = mb.addMenu("&View")
+            a_view_browser = m_view.addAction("Open &Browser Panel")
+            a_view_browser.triggered.connect(self._show_browser_panel)
+            a_view_toggle = m_view.addAction("&Toggle Browser Panel")
+            a_view_toggle.triggered.connect(self._toggle_browser_panel)
+            a_view_reset = m_view.addAction("&Reset Browser Profile")
+            a_view_reset.triggered.connect(self._reset_browser_profile)
+            a_view_cookies = m_view.addAction("&Import Cookies for Current Site")
+            a_view_cookies.triggered.connect(self._import_system_cookies_for_current_site)
+            m_view.addSeparator()
+            a_view_urls = m_view.addAction("Show &URL Grabber")
+            a_view_urls.triggered.connect(lambda: self.url_dock.show())
+            a_view_friends = m_view.addAction("Show &Friends")
+            a_view_friends.triggered.connect(lambda: self.friends_dock.show())
+            a_view_log = m_view.addAction("Show &IRC Log")
+            a_view_log.triggered.connect(lambda: self.log_dock.show())
+            a_view_find = m_view.addAction("&Find…")
+            a_view_find.setShortcut(QKeySequence.StandardKey.Find)
+            a_view_find.triggered.connect(lambda: self.find_dock.show())
+
+            # Tools
+            m_tools = mb.addMenu("&Tools")
+            a_ai = m_tools.addAction("Start &AI Chat…")
+            a_ai.triggered.connect(self._start_ai_chat)
+            a_ai_route = m_tools.addAction("&Route AI Output…")
+            a_ai_route.triggered.connect(self._choose_ai_route_target)
+            self.act_ai_route_stop = m_tools.addAction("Stop AI &Route")
+            self.act_ai_route_stop.setEnabled(False)
+            self.act_ai_route_stop.triggered.connect(self._stop_ai_route)
+            m_tools.addSeparator()
+            a_settings = m_tools.addAction("&Settings…")
+            a_settings.setShortcut(QKeySequence.StandardKey.Preferences)
+            a_settings.triggered.connect(self._open_settings_dialog)
+
+            # Help
+            m_help = mb.addMenu("&Help")
+            a_about = m_help.addAction("&About")
+            def _about():
+                try:
+                    QMessageBox.information(self, "About", "DeadHop\nPyQt6 with Qt WebEngine")
+                except Exception:
+                    pass
+            a_about.triggered.connect(_about)
+        except Exception:
+            pass
+
+    def _on_anchor_clicked(self, url: QUrl) -> None:
+        # With QWebEngineView the chat renders inline; keep this as fallback handler
+        try:
+            s = url.toString()
+        except Exception:
+            s = ""
+        vid = self._youtube_id(s) if s else None
+        if vid and hasattr(self, "video_panel") and self.video_panel:
+            try:
+                self.video_panel.play_youtube_id(vid)
+                return
+            except Exception:
+                pass
+        # Fallback to browser window
+        try:
+            self._ensure_browser_window()
+            if self.browser_window:
+                self.browser_window.open_url(url)
+        except Exception:
+            pass
 
     # ----- Formatting helpers -----
     _URL_RE = re.compile(r"(https?://\S+)")
@@ -1033,19 +1023,431 @@ class MainWindow(QMainWindow):
             url = m.group(1)
             low = url.lower()
             if any(low.endswith(ext) for ext in self._IMG_EXTS):
-                embed_html = f"<br><img src='{url}' style='max-width: 480px; border-radius: 6px;'>"
+                embed_html = f"<br><img src='{url}' style='border-radius: 8px;' data-msize='small'>"
             else:
                 yid = self._youtube_id(url)
                 if yid:
-                    thumb = f"https://img.youtube.com/vi/{yid}/hqdefault.jpg"
-                    embed_html = f"<br><a href='{url}' target='_blank'><img src='{thumb}' style='max-width: 480px; border-radius: 6px;'><br>Open on YouTube</a>"
+                    # Inline YouTube embed with default play button (no autoplay)
+                    embed_html = (
+                        "<br>"
+                        f"<iframe data-msize='small' width='560' height='315' src='https://www.youtube.com/embed/{yid}'"
+                        " title='YouTube video player' frameborder='0'"
+                        " allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture'"
+                        " allowfullscreen></iframe>"
+                    )
         prefix = ""
         if getattr(self, "_show_timestamps", False):
             if ts is None:
                 ts = time.time()
             t = time.localtime(ts)
-            prefix = f"<span style='color: #888'>[{t.tm_hour:02d}:{t.tm_min:02d}]</span> "
-        return f"{prefix}<b>{nick}:</b> {safe_text}{embed_html}"
+            prefix = f"<span class='ts'>[{t.tm_hour:02d}:{t.tm_min:02d}]</span> "
+        color = self._nick_color(nick)
+        nick_html = f"<span class='nick' style='--nick:{color}'>{nick}</span>"
+        return f"{prefix}{nick_html} <span class='msg-text'>{safe_text}</span>{embed_html}"
+
+    def _nick_color(self, nick: str) -> str:
+        try:
+            s = (nick or '').lower().encode('utf-8')
+            h = 0
+            for b in s:
+                h = (h * 131 + int(b)) & 0xFFFFFFFF
+            # map to pleasant hue range, fixed saturation/lightness
+            hue = h % 360
+            # Convert HSL to RGB (approx) for CSS hex
+            def hsl_to_rgb(h, s, l):
+                c = (1 - abs(2*l - 1)) * s
+                x = c * (1 - abs(((h/60) % 2) - 1))
+                m = l - c/2
+                if 0 <= h < 60:
+                    r,g,b = c,x,0
+                elif 60 <= h < 120:
+                    r,g,b = x,c,0
+                elif 120 <= h < 180:
+                    r,g,b = 0,c,x
+                elif 180 <= h < 240:
+                    r,g,b = 0,x,c
+                elif 240 <= h < 300:
+                    r,g,b = x,0,c
+                else:
+                    r,g,b = c,0,x
+                R = int((r+m)*255)
+                G = int((g+m)*255)
+                B = int((b+m)*255)
+                return f"#{R:02x}{G:02x}{B:02x}"
+            return hsl_to_rgb(hue, 0.65, 0.6)
+        except Exception:
+            return "#82b1ff"
+
+    # ----- Chat WebView helpers -----
+    def _init_chat_webview(self) -> None:
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset=\"utf-8\" />
+            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+            <style>
+            :root {
+                color-scheme: dark;
+                --bg1: #0f0f13;
+                --bg2: #141824;
+                --bg3: #0f1220;
+                --fg:  #e0e0e0;
+                --link: #82b1ff;
+            }
+            body {
+                margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+                background: #0f1116;
+                color: var(--fg);
+            }
+            #chat { padding: 12px 14px; }
+            a { color: var(--link); text-decoration: underline; cursor: pointer; }
+            .msg { margin: 8px 0; line-height: 1.42; word-wrap: break-word; }
+            .nick { color: #a78bfa; font-weight: 600; margin-right: 8px; }
+            .ts { opacity: .55; font-size: 12px; margin-right: 6px; }
+            .sys { opacity: .82; }
+            pre { background: rgba(255,255,255,0.04); padding: 8px; border-radius: 8px; overflow:auto }
+            code { background: rgba(255,255,255,0.06); padding: 2px 4px; border-radius: 4px }
+            /* Inline media sizing classes */
+            iframe, video { display: block; max-width: 100%; border: none; border-radius: 8px; }
+            .vid-s { width: 360px; max-width: 100%; }
+            .vid-m { width: 640px; max-width: 100%; }
+            .vid-l { width: 960px; max-width: 100%; }
+            @media (prefers-color-scheme: light) {
+                :root {
+                    --bg1: #f3f4f8;
+                    --bg2: #e9ecf6;
+                    --bg3: #f2f3f9;
+                    --fg:  #1a1a1a;
+                    --link: #2b5fd9;
+                }
+                body {
+                    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+                    background: #f4f6fb;
+                    color: var(--fg);
+                }
+            }
+            </style>
+                try {
+                    const root = document.documentElement;
+                    for (const k in vars) {
+                        root.style.setProperty('--' + k, vars[k]);
+                    }
+                } catch (e) {}
+            }
+            </script>
+        </head>
+        <body>
+            <div id=\"chat\"></div>
+          <script>
+            function toBottom(){ window.scrollTo(0, document.body.scrollHeight); }
+            function appendMessage(html){
+              const c = document.getElementById('chat');
+              const d = document.createElement('div');
+              d.className = 'msg';
+              d.innerHTML = html;
+              c.appendChild(d);
+              toBottom();
+            }
+            function startAI(){
+              const c = document.getElementById('chat');
+              const d = document.createElement('div');
+              d.className = 'msg';
+              d.innerHTML = '<b>AI:</b> <span id="ai-stream"></span>';
+              c.appendChild(d);
+              toBottom();
+            }
+            function aiChunk(text){
+              const s = document.getElementById('ai-stream');
+              if(s){ s.textContent += text; toBottom(); }
+            }
+          </script>
+        </body></html>
+        """
+        try:
+            base_html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset=\"utf-8\" />
+                <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+                <style>
+                :root {
+                    color-scheme: dark;
+                    --bg1: #0f0f13;
+                    --bg2: #141824;
+                    --bg3: #0f1220;
+                    --fg:  #e0e0e0;
+                    --link: #82b1ff;
+                }
+                body {
+                    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+                    background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 50%, var(--bg3) 100%);
+                    color: var(--fg);
+                }
+                #chat { padding: 12px 14px; }
+                a { color: var(--link); text-decoration: none; position: relative; }
+                a:after { content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px; background: linear-gradient(90deg, var(--link), #a78bfa); transform: scaleX(0); transition: transform .25s ease; transform-origin: left; }
+                a:hover:after { transform: scaleX(1); }
+                /* Default media smaller */
+                    img, iframe, video { max-width: 320px; border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.35); transition: transform .2s ease, box-shadow .2s ease; }
+                    iframe { border: none; }
+                    img:hover, iframe:hover, video:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0,0,0,.45); }
+                    /* Resizable via data-msize */
+                    img[data-msize="small"], iframe[data-msize="small"], video[data-msize="small"] { max-width: 320px; }
+                    img[data-msize="medium"], iframe[data-msize="medium"], video[data-msize="medium"] { max-width: 560px; }
+                    img[data-msize="large"], iframe[data-msize="large"], video[data-msize="large"] { max-width: 800px; }
+                    .msg { margin: 8px 0; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,0.02); transition: background .2s ease; }
+                    .msg:hover { background: rgba(255,255,255,0.05); }
+                    .ts { color: #8a8a8a; margin-right: 6px; }
+                    .nick { font-weight: 700; color: var(--nick); text-shadow: 0 0 8px color-mix(in oklab, var(--nick) 40%, transparent); }
+                    .msg-text { color: #d8d8d8; }
+                    /* Simple context menu */
+                    #ctx-menu { position: fixed; z-index: 9999; background: #1e1e1e; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; }
+                    #ctx-menu button { background: transparent; color: #eee; border: none; padding: 8px 12px; text-align: left; width: 100%; cursor: pointer; border-radius: 6px; }
+                    #ctx-menu button:hover { background: #2a2a2a; }
+                </style>
+            </head>
+            <body>
+                <div id=\"chat\"></div>
+                <script>
+                function scrollToBottom() {
+                    try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
+                }
+                function appendMessage(html) {
+                    try {
+                        const c = document.getElementById('chat');
+                        const d = document.createElement('div');
+                        d.className = 'msg';
+                        d.innerHTML = html;
+                        c.appendChild(d);
+                        scrollToBottom();
+                    } catch (e) {}
+                }
+                function startAI() {
+                    try {
+                        const c = document.getElementById('chat');
+                        const d = document.createElement('div');
+                        d.className = 'msg';
+                        d.innerHTML = '<i>AI:</i> <span id="ai-stream"></span>';
+                        c.appendChild(d);
+                        scrollToBottom();
+                    } catch (e) {}
+                }
+                function aiChunk(t) {
+                    try {
+                        const s = document.getElementById('ai-stream');
+                        if (s) { s.textContent = (s.textContent || '') + t; scrollToBottom(); }
+                    } catch (e) {}
+                }
+                </script>
+            </body>
+            </html>
+            """
+            try:
+                # Intercept link clicks so we don't navigate the chat page; route instead
+                from PyQt6.QtWebEngineCore import QWebEnginePage
+                class _ChatPage(QWebEnginePage):
+                    def __init__(self, win):
+                        super().__init__(win)
+                        self._win = win
+                    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+                        try:
+                            m = str(message)
+                            src = str(sourceID)
+                            # Filter common noisy messages
+                            noisy = (
+                                'requestStorageAccessFor',
+                                'generate_204',
+                                'googleads.g.doubleclick.net',
+                                'CORS policy',
+                                'ResizeObserver loop completed',
+                            )
+                            if any(s in m or s in src for s in noisy):
+                                return
+                        except Exception:
+                            pass
+                        try:
+                            super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
+                        except Exception:
+                            pass
+                    def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+                        try:
+                            # Only intercept user-initiated link clicks
+                            if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+                                # Route via main window handler (VideoPanel/BrowserWindow)
+                                try:
+                                    self._win._on_anchor_clicked(url)
+                                except Exception:
+                                    pass
+                                return False
+                        except Exception:
+                            pass
+                        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+                try:
+                    self.chat.setPage(_ChatPage(self))
+                except Exception:
+                    pass
+                self.chat.loadFinished.connect(self._on_chat_loaded)
+            except Exception:
+                pass
+            self.chat.setHtml(base_html, QUrl("about:blank"))
+        except Exception:
+            pass
+
+    def _apply_chat_theme(self) -> None:
+        try:
+            palette = self.palette()
+            bg1 = palette.color(QPalette.ColorRole.Base).name()
+            bg2 = palette.color(QPalette.ColorRole.AlternateBase).name()
+            bg3 = palette.color(QPalette.ColorRole.ToolTipBase).name()
+            fg = palette.color(QPalette.ColorRole.Text).name()
+            link = palette.color(QPalette.ColorRole.Link).name()
+            js = f"applyThemeVars({{{'bg1': '{bg1}', 'bg2': '{bg2}', 'bg3': '{bg3}', 'fg': '{fg}', 'link': '{link}'}}})"
+            self.chat.page().runJavaScript(js)
+        except Exception:
+            pass
+
+    def _on_chat_loaded(self, ok: bool) -> None:
+        # Mark ready and flush any buffered messages
+        self._chat_ready = bool(ok)
+        if not self._chat_ready:
+            return
+        # Apply theme variables to the freshly loaded chat document
+        try:
+            self._apply_chat_theme()
+        except Exception:
+            pass
+        # Ensure zoom reflects current font size
+        try:
+            size = int(self._chat_font_size) if self._chat_font_size else None
+            if size and size > 0:
+                self.chat.setZoomFactor(max(0.6, min(2.0, size / 12.0)))
+        except Exception:
+            pass
+        # Replay scrollback for active channel
+        try:
+            self._replay_scrollback()
+        except Exception:
+            pass
+        try:
+            if self._chat_buf:
+                for item in list(self._chat_buf):
+                    # If item looks like a raw HTML string, append directly
+                    self.chat.page().runJavaScript(f"appendMessage({json.dumps(item)})")
+        except Exception:
+            pass
+        finally:
+            try:
+                self._chat_buf.clear()
+            except Exception:
+                pass
+
+    def _chat_append(self, html: str) -> None:
+        # Cache into per-channel scrollback first
+        try:
+            cur = self.bridge.current_channel() or "status"
+            buf = self._scrollback.setdefault(cur, [])
+            buf.append(html)
+            if len(buf) > self._scrollback_limit:
+                del buf[:-self._scrollback_limit]
+            # Persist to disk best-effort
+            self._scrollback_save(cur, buf)
+        except Exception:
+            pass
+        # Then render (or buffer until webview ready)
+        try:
+            if not getattr(self, "_chat_ready", False):
+                getattr(self, "_chat_buf", []).append(html)
+                return
+            js = f"appendMessage({json.dumps(html)})"
+            self.chat.page().runJavaScript(js)
+        except Exception:
+            pass
+
+    def _replay_scrollback(self, ch: str | None = None) -> None:
+        try:
+            key = ch or (self.bridge.current_channel() or "status")
+            hist = list(self._scrollback.get(key, []))
+            if not hist:
+                # Attempt to load from disk
+                loaded = self._scrollback_load(key)
+                if loaded:
+                    self._scrollback[key] = list(loaded)
+                    hist = list(loaded)
+            if not hist:
+                return
+            # Efficiently append in order
+            for h in hist:
+                self.chat.page().runJavaScript(f"appendMessage({json.dumps(h)})")
+            # Ensure we are at bottom (match base_html helper)
+            self.chat.page().runJavaScript("scrollToBottom()")
+        except Exception:
+            pass
+
+    def _scrollback_path(self, ch: str) -> str | None:
+        try:
+            base = self._scrollback_dir
+            if not base:
+                return None
+            import os
+            os.makedirs(base, exist_ok=True)
+            # sanitize filename
+            safe = ''.join(c if c.isalnum() or c in ('#','-','_','@','.',':','+') else '_' for c in ch)
+            return os.path.join(base, f"scrollback_{safe}.json")
+        except Exception:
+            return None
+
+    def _scrollback_save(self, ch: str, buf: list[str]) -> None:
+        try:
+            path = self._scrollback_path(ch)
+            if not path:
+                return
+            import json as _json
+            data = buf[-self._scrollback_limit:]
+            with open(path, 'w', encoding='utf-8') as f:
+                _json.dump(data, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _scrollback_load(self, ch: str) -> list[str] | None:
+        try:
+            path = self._scrollback_path(ch)
+            if not path:
+                return None
+            import json as _json
+            import os
+            if not os.path.exists(path):
+                return None
+            with open(path, 'r', encoding='utf-8') as f:
+                data = _json.load(f)
+            if isinstance(data, list):
+                return [str(x) for x in data][-self._scrollback_limit:]
+        except Exception:
+            pass
+        return None
+
+    def _chat_start_ai_line(self) -> None:
+        try:
+            if not getattr(self, "_chat_ready", False):
+                # Represent startAI by an empty AI line to be appended later
+                getattr(self, "_chat_buf", []).append("<i>AI:</i> <span id='ai-stream'></span>")
+                return
+            self.chat.page().runJavaScript("startAI()")
+        except Exception:
+            pass
+
+    def _chat_ai_chunk(self, text: str) -> None:
+        try:
+            if not getattr(self, "_chat_ready", False):
+                # If AI not ready, accumulate into a synthetic line
+                buf = getattr(self, "_chat_buf", None)
+                if isinstance(buf, list):
+                    buf.append(json.dumps(text))
+                return
+            self.chat.page().runJavaScript(f"aiChunk({json.dumps(text)})")
+        except Exception:
+            pass
 
     def _on_submit(self, text: str) -> None:
         if not text.strip():
@@ -1054,29 +1456,42 @@ class MainWindow(QMainWindow):
         cur = self.bridge.current_channel() or ""
         if cur.startswith("[AI:"):
             # AI session: stream response from Ollama
-            self.chat.append(self._format_message_html("You", text, ts=time.time()))
+            try:
+                self._chat_append(self._format_message_html("You", text, ts=time.time()))
+            except Exception:
+                pass
             self._run_ai_inference(cur, text)
         else:
             if text.startswith('/'):
                 self._handle_command(text, cur)
             else:
                 try:
-                    self.bridge.sendMessage(text)
+                    # Use async-safe scheduling
+                    self._schedule_async(self.bridge.sendMessage, text)
                 except Exception:
                     # Fallback: raw PRIVMSG to current target
                     if cur:
                         tgt = self._irc_target_from_label(cur)
                         if tgt:
                             self._send_raw(f"PRIVMSG {tgt} :{text}")
-                # optionally local-echo your message for plain chat only
-                try:
-                    self.chat.append(self._format_message_html(self._my_nick or "You", text, ts=time.time()))
-                except Exception:
-                    pass
+
+    def _default_nick(self) -> str:
+        """Generate a randomized default nick (e.g., peach1234)."""
+        try:
+            import secrets
+            return f"peach{secrets.randbelow(9000)+1000}"
+        except Exception:
+            import random
+            return f"peach{random.randint(1000,9999)}"
 
     def _handle_command(self, cmdline: str, cur: str) -> None:
-        parts = cmdline.lstrip('/').split(' ', 1)
-        cmd = (parts[0] if parts else '').lower()
+        cmdline = (cmdline or "").strip()
+        if not cmdline:
+            return
+        if not cmdline.startswith('/'):
+            return
+        parts = cmdline[1:].split(None, 1)
+        cmd = parts[0].lower() if parts else ''
         arg = parts[1] if len(parts) > 1 else ''
         def _raw(s: str) -> None:
             self._send_raw(s)
@@ -1084,7 +1499,8 @@ class MainWindow(QMainWindow):
             fn = getattr(self.bridge, 'sendMessageTo', None)
             if callable(fn):
                 try:
-                    fn(target, msg)
+                    # Bridge slot may be async; schedule safely
+                    self._schedule_async(fn, target, msg)
                     return True
                 except Exception:
                     pass
@@ -1100,24 +1516,15 @@ class MainWindow(QMainWindow):
             # CTCP ACTION
             if not _send_to(target, f"\x01ACTION {action}\x01"):
                 _raw(f"PRIVMSG {target} :\x01ACTION {action}\x01")
-            try:
-                self.chat.append(self._format_message_html(self._my_nick or "You", f"* {action}", ts=time.time()))
-            except Exception:
-                pass
-        elif cmd in ("join",):
-            ch = arg.strip()
-            if ch and not ch.startswith(('#', '&')):
-                ch = '#' + ch
+            # No local echo here; we'll format on _on_message when echo arrives
+        elif cmd in ("join", "j"):
+            ch = (arg or '').strip()
             if ch:
-                try:
-                    self.bridge.joinChannel(ch)
-                except Exception:
-                    _raw(f"JOIN {ch}")
-                # Local echo of join
-                try:
-                    self.chat.append(f"<i>• Joined {ch}</i>")
-                except Exception:
-                    pass
+                self._join_channel(ch)
+        elif cmd == "nick":
+            newn = (arg or '').strip()
+            if newn:
+                self._change_nick(newn)
         elif cmd in ("part", "leave"):
             ch = arg.strip() or cur
             if ch and not ch.startswith(('#', '&')):
@@ -1129,18 +1536,10 @@ class MainWindow(QMainWindow):
                     _raw(f"PART {ch}")
                 # Local echo of part
                 try:
-                    self.chat.append(f"<i>• Left {ch}</i>")
+                    self._chat_append(f"<i>• Left {ch}</i>")
                 except Exception:
                     pass
-        elif cmd == "nick":
-            newn = arg.strip()
-            if newn:
-                try:
-                    self.bridge.changeNick(newn)
-                except Exception:
-                    _raw(f"NICK {newn}")
-                self._my_nick = newn
-        elif cmd in ("msg", "query"):
+        elif cmd == "msg":
             # /msg <target> <message>
             try:
                 target, msg = arg.split(' ', 1)
@@ -1190,7 +1589,7 @@ class MainWindow(QMainWindow):
             if not target or not modes:
                 return
             try:
-                self.bridge.setModes(target, modes)
+                self._schedule_async(self.bridge.setModes, target, modes)
             except Exception:
                 _raw(f"MODE {target} {modes}")
         elif cmd == "raw":
@@ -1227,7 +1626,8 @@ class MainWindow(QMainWindow):
             fn = getattr(self.bridge, meth, None)
             if callable(fn):
                 try:
-                    fn(line)
+                    # Schedule; supports async slots transparently
+                    self._schedule_async(fn, line)
                     sent = True
                     break
                 except Exception:
@@ -1235,12 +1635,312 @@ class MainWindow(QMainWindow):
         if not sent:
             self.toast_host.show_toast("Raw command not supported by bridge")
 
+    def _strip_irc_codes(self, s: str) -> str:
+        """Strip common IRC formatting/control codes from text.
+
+        Removes mIRC color codes (\x03[fg][,bg]), bold (\x02), underline (\x1f),
+        reverse (\x16), italics (\x1d), and reset (\x0f). Also strips \x04 hex colors.
+        """
+        if not s:
+            return ""
+        try:
+            # Remove \x04 HEX color (rare): \x04RRGGBB(,RRGGBB)?
+            s = re.sub(r"\x04[0-9A-Fa-f]{6}(?:,[0-9A-Fa-f]{6})?", "", s)
+            # Remove \x03 color codes like \x0304 or \x0304,02
+            s = re.sub(r"\x03(?:\d{1,2}(?:,\d{1,2})?)?", "", s)
+            # Remove other simple toggles
+            s = s.replace("\x02", "")  # bold
+            s = s.replace("\x1f", "")  # underline
+            s = s.replace("\x16", "")  # reverse
+            s = s.replace("\x1d", "")  # italics
+            s = s.replace("\x0f", "")  # reset
+            return s
+        except Exception:
+            return s
+
     def _on_status(self, s: str) -> None:
         # Feed negotiation parser first with raw line
         try:
             self._negotiate_handle_line(s or "")
         except Exception:
             pass
+
+        # Attempt to extract network prefix and message body
+        net = None
+        body = s or ""
+        try:
+            if body.startswith("[") and "]" in body:
+                net = body.split("]", 1)[0][1:]
+                body = body.split("]", 1)[1].strip()
+        except Exception:
+            pass
+
+        # Handle raw incoming lines (debug mode provides "<< ...") for inline rendering of numerics (WHOIS, MOTD, LIST, errors, etc.)
+        try:
+            if body.startswith("<< "):
+                raw = body[3:].strip()
+                # Parse common WHOIS numerics and related notices
+                # Typical: ":server 311 mynick target user host * :Real Name"
+                parts = raw.split()
+                code = None
+                if len(parts) >= 2 and parts[0].startswith(":") and parts[1].isdigit():
+                    code = parts[1]
+                elif len(parts) >= 1 and parts[0].isdigit():
+                    code = parts[0]
+
+                def server_emit(text: str) -> None:
+                    """Append a system line to the server view buffer and live UI if that network is selected."""
+                    try:
+                        if not net:
+                            return
+                        # Persist as plain text; network select will re-render
+                        buf = self._status_by_net.setdefault(net, [])
+                        buf.append(text)
+                        if len(buf) > 500:
+                            del buf[:-500]
+                        # Live render if network is selected
+                        if getattr(self, "_selected_network", None) == net:
+                            html = f"<span class='sys'><i>{self._strip_irc_codes(text)}</i></span>"
+                            self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+                    except Exception:
+                        pass
+
+                if code in {"311", "312", "317", "318", "319", "330", "671", "313", "338", "301", "005", "375", "372", "376", "422", "321", "322", "323", "433", "471", "473", "474", "475", "401", "402", "404"}:
+                    try:
+                        # Extract target nick if present
+                        target_nick = None
+                        if len(parts) >= 4 and parts[0].startswith(":"):
+                            target_nick = parts[3]
+                        # Build readable lines per code
+                        if code == "311" and len(parts) >= 7:
+                            user = parts[4]
+                            host = parts[5]
+                            realname = raw.split(":", 2)[-1] if ":" in raw else ""
+                            server_emit(f"whois {target_nick}: {user}@{host} — {realname}")
+                        elif code == "312" and len(parts) >= 5:
+                            server = parts[4]
+                            info = raw.split(":", 2)[-1] if ":" in raw else ""
+                            server_emit(f"whois {target_nick}: server {server} {info}")
+                        elif code == "317" and len(parts) >= 6:
+                            idle = parts[4]
+                            try:
+                                idle_s = int(idle)
+                                idle_str = f"idle {idle_s}s"
+                            except Exception:
+                                idle_str = f"idle {idle}s"
+                            server_emit(f"whois {target_nick}: {idle_str}")
+                        elif code == "318":
+                            server_emit(f"whois {target_nick}: end of WHOIS")
+                        elif code == "319":
+                            chans = raw.split(":", 2)[-1] if ":" in raw else ""
+                            server_emit(f"whois {target_nick}: channels {chans}")
+                        elif code == "330" and len(parts) >= 5:
+                            account = parts[4]
+                            server_emit(f"whois {target_nick}: logged in as {account}")
+                        elif code == "671":
+                            server_emit(f"whois {target_nick}: secure connection (TLS)")
+                        elif code == "313":
+                            server_emit(f"whois {target_nick}: is an IRC operator")
+                        elif code == "338" and len(parts) >= 5:
+                            # 338 RPL_WHOISACTUALLY (real IP), format varies; show trailing text
+                            tail = raw.split(":", 2)[-1] if ":" in raw else ""
+                            server_emit(f"whois {target_nick}: {tail}")
+                        elif code == "301":
+                            # RPL_AWAY during WHOIS
+                            away = raw.split(":", 2)[-1] if ":" in raw else ""
+                            server_emit(f"whois {target_nick}: away — {away}")
+                        elif code == "005":
+                            # ISUPPORT tokens after nick; until the ':' (trailing) begins
+                            # Example: ":server 005 mynick PREFIX=(ov)@+ CHANMODES=beI,k,l,imnpst :are supported by this server"
+                            try:
+                                # tokens start after parts[2]
+                                tokens = []
+                                for tok in parts[3:]:
+                                    if tok.startswith(":"):
+                                        break
+                                    tokens.append(tok)
+                                mp = self._isupport_by_net.setdefault(net, {})
+                                for tok in tokens:
+                                    if '=' in tok:
+                                        k, v = tok.split('=', 1)
+                                        mp[k] = v
+                                    else:
+                                        mp[tok] = "1"
+                                # Display a compact line
+                                view = ' '.join(tokens[:12]) + (" …" if len(tokens) > 12 else "")
+                                server_emit(f"ISUPPORT: {view}")
+                            except Exception:
+                                pass
+                        elif code == "375":
+                            server_emit("— MOTD —")
+                        elif code == "372":
+                            line = raw.split(":", 2)[-1] if ":" in raw else ""
+                            server_emit(f"MOTD: {line}")
+                        elif code == "376":
+                            server_emit("— End of MOTD —")
+                        elif code == "422":
+                            server_emit("No MOTD available")
+                        elif code == "321":
+                            server_emit("— LIST: Channel  Users  :Topic —")
+                        elif code == "322":
+                            # ":server 322 me #chan users :topic"
+                            chname = parts[3] if len(parts) > 3 else "?"
+                            users = parts[4] if len(parts) > 4 else "?"
+                            topic = raw.split(":", 2)[-1] if ":" in raw else ""
+                            server_emit(f"LIST {chname}  {users}  :{topic}")
+                        elif code == "323":
+                            server_emit("— End of LIST —")
+                        elif code == "433":
+                            bad = parts[3] if len(parts) > 3 else ""
+                            server_emit(f"Nick already in use: {bad}")
+                        elif code in {"471", "473", "474", "475"}:
+                            # Join errors
+                            chname = parts[3] if len(parts) > 3 else ""
+                            reason = raw.split(":", 2)[-1] if ":" in raw else code
+                            server_emit(f"Cannot join {chname}: {reason}")
+                        elif code in {"401", "402", "404"}:
+                            target = parts[3] if len(parts) > 3 else ""
+                            reason = raw.split(":", 2)[-1] if ":" in raw else code
+                            server_emit(f"Error {code} {target}: {reason}")
+                        # Regardless of handling, return since we've consumed a WHOIS line
+                        return
+                    except Exception:
+                        # Fall through to minimal status handling
+                        pass
+
+                # Non-numeric commands (JOIN/PART/QUIT/NICK/TOPIC/MODE) -> channel system messages
+                try:
+                    # Skip if typed events are wired to avoid duplicates
+                    if getattr(self, "_typed_events", False):
+                        raise Exception("typed events enabled; skip raw non-numerics")
+                    if len(parts) >= 2 and parts[0].startswith(":"):
+                        prefix = parts[0][1:]
+                        cmd = parts[1].upper()
+                        nick = prefix.split('!', 1)[0]
+
+                        def channel_emit(comp: str, text: str) -> None:
+                            try:
+                                if not comp:
+                                    return
+                                # Persist to scrollback
+                                sb = self._scrollback.setdefault(comp, [])
+                                html = f"<span class='sys'><i>{self._strip_irc_codes(text)}</i></span>"
+                                sb.append(html)
+                                if len(sb) > self._scrollback_limit:
+                                    del sb[:-self._scrollback_limit]
+                                # Live render if active
+                                if (self.bridge.current_channel() or "") == comp:
+                                    self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+                                else:
+                                    # Increment unread for that channel
+                                    try:
+                                        self._unread[comp] = self._unread.get(comp, 0) + 1
+                                        self.sidebar.set_unread(comp, self._unread[comp], self._highlights.get(comp, 0))
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+
+                        def members_add(comp: str, who: str) -> None:
+                            try:
+                                names = set(self._names_by_channel.get(comp, []))
+                                if who not in names:
+                                    names.add(who)
+                                    self._names_by_channel[comp] = sorted(names)
+                                    if (self.bridge.current_channel() or "") == comp:
+                                        self.members.set_members(list(self._names_by_channel[comp]))
+                                        self.composer.set_completion_names(list(self._names_by_channel[comp]))
+                            except Exception:
+                                pass
+
+                        def members_remove(comp: str, who: str) -> None:
+                            try:
+                                names = list(self._names_by_channel.get(comp, []))
+                                if who in names:
+                                    names = [x for x in names if x != who]
+                                    self._names_by_channel[comp] = names
+                                    if (self.bridge.current_channel() or "") == comp:
+                                        self.members.set_members(list(names))
+                                        self.composer.set_completion_names(list(names))
+                            except Exception:
+                                pass
+
+                        # Determine channel composite label helper
+                        def comp_for_chan(chan: str) -> str | None:
+                            try:
+                                if not net:
+                                    return None
+                                chn = chan.lstrip(':')
+                                return f"{net}:{chn}"
+                            except Exception:
+                                return None
+
+                        if cmd == "JOIN" and len(parts) >= 3:
+                            ch = parts[2]
+                            comp = comp_for_chan(ch)
+                            if comp:
+                                channel_emit(comp, f"• {nick} joined {ch}")
+                                members_add(comp, nick)
+                            return
+                        if cmd == "PART" and len(parts) >= 3:
+                            ch = parts[2]
+                            reason = raw.split(":", 2)[-1] if ":" in raw else ""
+                            comp = comp_for_chan(ch)
+                            if comp:
+                                txt = f"• {nick} left {ch} ({reason})" if reason else f"• {nick} left {ch}"
+                                channel_emit(comp, txt)
+                                members_remove(comp, nick)
+                            return
+                        if cmd == "QUIT":
+                            reason = raw.split(":", 2)[-1] if ":" in raw else ""
+                            # Emit to all channels where nick is present on this net
+                            for comp, names in list(self._names_by_channel.items()):
+                                if not comp.startswith(f"{net}:"):
+                                    continue
+                                if nick in names:
+                                    txt = f"• {nick} quit ({reason})" if reason else f"• {nick} quit"
+                                    channel_emit(comp, txt)
+                                    members_remove(comp, nick)
+                            return
+                        if cmd == "NICK" and len(parts) >= 3:
+                            new_nick = parts[2].lstrip(':')
+                            for comp, names in list(self._names_by_channel.items()):
+                                if not comp.startswith(f"{net}:"):
+                                    continue
+                                if nick in names:
+                                    channel_emit(comp, f"• {nick} is now known as {new_nick}")
+                                    # Update member list
+                                    try:
+                                        updated = [new_nick if x == nick else x for x in names]
+                                        self._names_by_channel[comp] = sorted(set(updated))
+                                        if (self.bridge.current_channel() or "") == comp:
+                                            self.members.set_members(list(self._names_by_channel[comp]))
+                                            self.composer.set_completion_names(list(self._names_by_channel[comp]))
+                                    except Exception:
+                                        pass
+                            return
+                        if cmd == "TOPIC" and len(parts) >= 3:
+                            ch = parts[2]
+                            topic = raw.split(":", 2)[-1] if ":" in raw else ""
+                            comp = comp_for_chan(ch)
+                            if comp:
+                                channel_emit(comp, f"• {nick} set topic: {topic}")
+                            return
+                        if cmd == "MODE" and len(parts) >= 4:
+                            target = parts[2]
+                            modes = ' '.join(parts[3:])
+                            comp = comp_for_chan(target) if target.startswith(('#','&','+','!')) else None
+                            if comp:
+                                channel_emit(comp, f"• mode/{target} {modes}")
+                            else:
+                                # user mode or other: emit to server view
+                                server_emit(f"mode {target} {modes}")
+                            return
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # Minimal status verbosity: show only essential connection info
         clean = self._strip_irc_codes(s or "")
         txt = clean.strip()
@@ -1263,14 +1963,7 @@ class MainWindow(QMainWindow):
             return
         # Show allowed line in status bar and chat (italic)
         self.status.showMessage(clean, 2500)
-        self.chat.append(f"<i>{clean}</i>")
-        # auto-scroll chat
-        try:
-            c = self.chat.textCursor()
-            c.movePosition(c.MoveOperation.End)
-            self.chat.setTextCursor(c)
-        except Exception:
-            pass
+        self._chat_append(f"<i>{clean}</i>")
 
     def _on_channel_action(self, ch: str, action: str) -> None:
         a = action.lower()
@@ -1312,7 +2005,12 @@ class MainWindow(QMainWindow):
 
     # ----- Settings management -----
     def _load_settings(self) -> None:
-        s = QSettings("Peach", "PeachClient")
+        # One-time migration from legacy Peach settings to DeadHop
+        try:
+            self._maybe_migrate_qsettings()
+        except Exception:
+            pass
+        s = QSettings("DeadHop", "DeadHopClient")
         self._current_theme = s.value("theme", type=str)
         self._word_wrap = s.value("word_wrap", True, type=bool)
         self._show_timestamps = s.value("show_timestamps", False, type=bool)
@@ -1350,15 +2048,45 @@ class MainWindow(QMainWindow):
             friends = s.value("friends", [], type=list)
             if friends:
                 self.friends.set_friends(list(friends))
-                # push to bridge
-                self.bridge.setMonitorList(list(friends))
+                # push to bridge (async)
+                try:
+                    self._schedule_async(self.bridge.setMonitorList, list(friends))
+                except Exception:
+                    pass
         except Exception:
             pass
+        try:
+            avatars = s.value("avatars", {}, type=dict)
+            if isinstance(avatars, dict):
+                self._avatar_map = dict(avatars)
+                # push to widgets
+                try:
+                    self.friends.set_avatars(self._avatar_map)
+                except Exception:
+                    pass
+                try:
+                    self.members.set_avatars(self._avatar_map)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Presence notification prefs (defaults: online on, offline off)
+        try:
+            self._notify_presence_online = s.value("notify/presence_online", True, type=bool)
+            self._notify_presence_offline = s.value("notify/presence_offline", False, type=bool)
+            self._notify_presence_system = s.value("notify/presence_system", True, type=bool)
+            self._notify_presence_sound = s.value("notify/presence_sound", False, type=bool)
+        except Exception:
+            self._notify_presence_online = True
+            self._notify_presence_offline = False
+            self._notify_presence_system = True
+            self._notify_presence_sound = False
 
     def _save_settings(self) -> None:
-        s = QSettings("Peach", "PeachClient")
-        if self._current_theme:
-            s.setValue("theme", self._current_theme)
+        s = QSettings("DeadHop", "DeadHopClient")
+        theme = getattr(self, "_current_theme", None)
+        if theme:
+            s.setValue("theme", theme)
         s.setValue("word_wrap", self._word_wrap)
         s.setValue("show_timestamps", self._show_timestamps)
         s.setValue("opacity", float(self.windowOpacity()))
@@ -1377,6 +2105,19 @@ class MainWindow(QMainWindow):
             s.setValue("friends", fr)
         except Exception:
             pass
+        # avatars
+        try:
+            s.setValue("avatars", dict(self._avatar_map))
+        except Exception:
+            pass
+        # presence notify prefs
+        try:
+            s.setValue("notify/presence_online", bool(getattr(self, "_notify_presence_online", True)))
+            s.setValue("notify/presence_offline", bool(getattr(self, "_notify_presence_offline", False)))
+            s.setValue("notify/presence_system", bool(getattr(self, "_notify_presence_system", True)))
+            s.setValue("notify/presence_sound", bool(getattr(self, "_notify_presence_sound", False)))
+        except Exception:
+            pass
         # Persist geometry and splitter state
         try:
             s.setValue("win_geometry", self.saveGeometry())
@@ -1391,8 +2132,348 @@ class MainWindow(QMainWindow):
     def closeEvent(self, ev) -> None:  # type: ignore[override]
         try:
             self._save_settings()
+        except Exception:
+            pass
         finally:
-            super().closeEvent(ev)
+            # Ensure tray icon is hidden and cleaned up on exit
+            try:
+                if getattr(self, 'tray', None) is not None:
+                    try:
+                        self.tray.hide()
+                    except Exception:
+                        pass
+                    try:
+                        self.tray.deleteLater()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                super().closeEvent(ev)
+            except Exception:
+                pass
+
+    def _on_tray_activated(self, reason) -> None:
+        """Bring the window to front when the tray icon is activated (e.g., clicked)."""
+        try:
+            # For single-click, double-click, or context. Minimal behavior: show and raise window
+            self.showNormal()
+            self.raise_()
+            try:
+                self.activateWindow()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _show_from_tray(self) -> None:
+        try:
+            self.showNormal()
+            self.raise_()
+            try:
+                self.activateWindow()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _hide_from_tray(self) -> None:
+        try:
+            self.hide()
+        except Exception:
+            pass
+
+    def _quit_from_tray(self) -> None:
+        try:
+            # Ensure proper shutdown path
+            self.close()
+        except Exception:
+            pass
+
+    def _init_quick_toolbar(self) -> None:
+        from PyQt6.QtWidgets import QToolBar, QLabel, QComboBox, QSlider, QLineEdit, QPushButton, QInputDialog
+        tb = QToolBar("Quick")
+        tb.setMovable(False)
+        tb.setFloatable(False)
+        tb.setIconSize(QSize(16, 16))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
+        # Font size slider
+        tb.addWidget(QLabel(" Font "))
+        sld = QSlider(Qt.Orientation.Horizontal)
+        sld.setMinimum(9)
+        sld.setMaximum(22)
+        try:
+            cur_pt = int(self._chat_font_size) if self._chat_font_size else self.font().pointSize() or 12
+        except Exception:
+            cur_pt = 12
+        sld.setValue(max(9, min(22, int(cur_pt))))
+        sld.setFixedWidth(140)
+        def on_font_changed(val: int) -> None:
+            try:
+                self._chat_font_size = int(val)
+            except Exception:
+                self._chat_font_size = 12
+            self._apply_global_font_size(int(self._chat_font_size))
+            self._save_settings()
+        sld.valueChanged.connect(on_font_changed)
+        tb.addWidget(sld)
+
+        # Theme dropdown (small set for quick access)
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Theme "))
+        cbo_theme = QComboBox()
+        themes: list[str] = []
+        try:
+            from qt_material import list_themes
+            themes = ["Material Dark", "Material Light"] + [t for t in list(list_themes()) if t not in ("Material Dark", "Material Light")]
+        except Exception:
+            themes = ["Material Dark", "Material Light"]
+        cbo_theme.addItems(themes)
+        if self._current_theme and self._current_theme in themes:
+            cbo_theme.setCurrentText(self._current_theme)
+        def on_theme(name: str) -> None:
+            self._current_theme = name
+            try:
+                self._apply_qt_material(name)
+            except Exception:
+                pass
+            self._save_settings()
+        cbo_theme.currentTextChanged.connect(on_theme)
+        tb.addWidget(cbo_theme)
+
+        # Wrap dropdown
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Wrap "))
+        cbo_wrap = QComboBox()
+        cbo_wrap.addItems(["On", "Off"])
+        cbo_wrap.setCurrentText("On" if self._word_wrap else "Off")
+        def on_wrap(txt: str) -> None:
+            self._word_wrap = (txt == "On")
+            self._set_word_wrap(self._word_wrap)
+            self._save_settings()
+        cbo_wrap.currentTextChanged.connect(on_wrap)
+        tb.addWidget(cbo_wrap)
+
+        # Timestamps dropdown
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Timestamps "))
+        cbo_ts = QComboBox()
+        cbo_ts.addItems(["Off", "On"])  # default off like settings
+        cbo_ts.setCurrentText("On" if self._show_timestamps else "Off")
+        def on_ts(txt: str) -> None:
+            self._show_timestamps = (txt == "On")
+            self._set_timestamps(self._show_timestamps)
+            self._save_settings()
+        cbo_ts.currentTextChanged.connect(on_ts)
+        tb.addWidget(cbo_ts)
+
+        # Join channel quick control
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Join "))
+        join_box = QLineEdit()
+        join_box.setPlaceholderText("#channel")
+        join_box.setFixedWidth(140)
+        def do_join():
+            ch = join_box.text().strip()
+            if ch:
+                self._join_channel(ch)
+                join_box.clear()
+        join_box.returnPressed.connect(do_join)
+        tb.addWidget(join_box)
+        btn_join = QPushButton("+")
+        btn_join.setFixedWidth(22)
+        btn_join.clicked.connect(do_join)
+        tb.addWidget(btn_join)
+
+        # Change nick quick control (button opens prompt)
+        tb.addSeparator()
+        btn_nick = QPushButton("Nick…")
+        def on_nick():
+            try:
+                cur_nick = ""  # we may not have it; allow blank
+                new, ok = QInputDialog.getText(self, "Change Nick", "New nickname:", text=cur_nick)
+                if ok and new.strip():
+                    self._change_nick(new.strip())
+            except Exception:
+                pass
+        btn_nick.clicked.connect(on_nick)
+        tb.addWidget(btn_nick)
+
+        # Quick user mode toggles (+i, -i, +x, -x)
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Me "))
+        btn_ui = QPushButton("+i")
+        btn_ux = QPushButton("+x")
+        btn_di = QPushButton("-i")
+        btn_dx = QPushButton("-x")
+        btn_ui.setFixedWidth(28)
+        btn_ux.setFixedWidth(28)
+        btn_di.setFixedWidth(28)
+        btn_dx.setFixedWidth(28)
+        try:
+            btn_ui.clicked.connect(lambda: self.bridge.setMyModes("+i"))
+            btn_di.clicked.connect(lambda: self.bridge.setMyModes("-i"))
+            btn_ux.clicked.connect(lambda: self.bridge.setMyModes("+x"))
+            btn_dx.clicked.connect(lambda: self.bridge.setMyModes("-x"))
+        except Exception:
+            pass
+        tb.addWidget(btn_ui)
+        tb.addWidget(btn_di)
+        tb.addWidget(btn_ux)
+        tb.addWidget(btn_dx)
+
+        # Notifications toggles
+        from PyQt6.QtWidgets import QCheckBox
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Notify "))
+        chk_toast = QCheckBox("Toast")
+        chk_tray = QCheckBox("Tray")
+        chk_sound = QCheckBox("Sound")
+        chk_toast.setChecked(getattr(self, "_notify_toast", True))
+        chk_tray.setChecked(getattr(self, "_notify_tray", True))
+        chk_sound.setChecked(getattr(self, "_notify_sound", True))
+        def on_toast(v: bool) -> None:
+            self._notify_toast = bool(v)
+            try:
+                s = QSettings("DeadHop", "DeadHopClient")
+                s.setValue("notify/toast", bool(v))
+            except Exception:
+                pass
+        def on_tray(v: bool) -> None:
+            self._notify_tray = bool(v)
+            try:
+                s = QSettings("DeadHop", "DeadHopClient")
+                s.setValue("notify/tray", bool(v))
+            except Exception:
+                pass
+        def on_sound(v: bool) -> None:
+            self._notify_sound = bool(v)
+            try:
+                s = QSettings("DeadHop", "DeadHopClient")
+                s.setValue("notify/sound", bool(v))
+            except Exception:
+                pass
+        chk_toast.toggled.connect(on_toast)
+        chk_tray.toggled.connect(on_tray)
+        chk_sound.toggled.connect(on_sound)
+        tb.addWidget(chk_toast)
+        tb.addWidget(chk_tray)
+        tb.addWidget(chk_sound)
+
+    def _init_notifications(self) -> None:
+        """Initialize tray icon and sound effects (best-effort)."""
+        # System tray icon for popups
+        try:
+            if not hasattr(self, "tray"):
+                self.tray = QSystemTrayIcon(self)
+                self.tray.setIcon(self.windowIcon())
+                self.tray.setToolTip("DeadHop")
+                self.tray.setVisible(True)
+        except Exception:
+            pass
+        # Sounds (best-effort); use QSoundEffect if available, else fallback to beep
+        self._se_msg = None
+        self._se_hl = None
+        try:
+            from PyQt6.QtMultimedia import QSoundEffect
+            base = Path(__file__).resolve().parents[1] / "resources" / "sounds"
+            msg = base / "message.wav"
+            hl = base / "highlight.wav"
+            if msg.exists():
+                self._se_msg = QSoundEffect(self)
+                self._se_msg.setSource(QUrl.fromLocalFile(str(msg)))
+                self._se_msg.setVolume(0.25)
+            if hl.exists():
+                self._se_hl = QSoundEffect(self)
+                self._se_hl.setSource(QUrl.fromLocalFile(str(hl)))
+                self._se_hl.setVolume(0.35)
+        except Exception:
+            self._se_msg = None
+            self._se_hl = None
+
+    def _notify_event(self, title: str, body: str, highlight: bool = False) -> None:
+        """Emit toast, tray popup, and sound based on preferences."""
+        # Toast
+        try:
+            if self._notify_toast:
+                self.toast_host.show_toast(f"{title}: {body}")
+        except Exception:
+            pass
+        # Tray popup
+        try:
+            if self._notify_tray and hasattr(self, "tray") and self.tray:
+                self.tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, 3500)
+        except Exception:
+            pass
+        # Sound
+        try:
+            if self._notify_sound:
+                se = self._se_hl if highlight and self._se_hl else self._se_msg
+                if se:
+                    se.play()
+                else:
+                    from PyQt6.QtWidgets import QApplication
+                    QApplication.beep()
+        except Exception:
+            pass
+
+    def _join_channel(self, ch: str) -> None:
+        ch = ch.strip()
+        if not ch:
+            return
+        # Ensure channel starts with '#'
+        if not (ch.startswith('#') or ch.startswith('&') or ch.startswith('+') or ch.startswith('!')):
+            ch = '#' + ch
+        # Determine target network from current channel or selected network in the tree
+        composite = None
+        try:
+            cur = self.bridge.current_channel() or ""
+            net = None
+            if cur and ":" in cur and not cur.startswith("["):
+                net = cur.split(":", 1)[0]
+            if not net:
+                net = getattr(self, "_selected_network", None)
+            if net:
+                composite = f"{net}:{ch}"
+        except Exception:
+            pass
+        try:
+            fn = getattr(self.bridge, 'joinChannel', None)
+            if callable(fn) and composite:
+                self._schedule_async(fn, composite)
+                return
+        except Exception:
+            pass
+        # Fallback raw (will hit all networks if none selected)
+        self._send_raw(f"JOIN {ch}")
+
+    def _change_nick(self, nick: str) -> None:
+        nick = (nick or '').strip()
+        if not nick:
+            return
+        # Prefer raw NICK (works on all networks)
+        self._send_raw(f"NICK {nick}")
+
+    def _apply_global_font_size(self, pt: int) -> None:
+        # Apply to entire app via QApplication font, plus chat zoom
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                f = app.font()
+                if pt > 0:
+                    f.setPointSize(int(pt))
+                    app.setFont(f)
+        except Exception:
+            pass
+        # Chat webview: use zoom factor so content scales
+        try:
+            new_zoom = max(0.6, min(2.0, pt / 12.0))
+            if getattr(self, "_last_zoom", None) != new_zoom:
+                self.chat.setZoomFactor(new_zoom)
+                self._last_zoom = new_zoom
+        except Exception:
+            pass
+        # No closeEvent calls here; just return after applying font/zoom
 
     def _apply_settings(self) -> None:
         # word wrap
@@ -1406,6 +2487,12 @@ class MainWindow(QMainWindow):
             if self._chat_font_size and int(self._chat_font_size) > 0:
                 f.setPointSize(int(self._chat_font_size))
             self.chat.setFont(f)
+        # Also apply global font size to the app and chat zoom
+        try:
+            if self._chat_font_size and int(self._chat_font_size) > 0:
+                self._apply_global_font_size(int(self._chat_font_size))
+        except Exception:
+            pass
         # theme
         if self._current_theme:
             try:
@@ -1439,7 +2526,7 @@ class MainWindow(QMainWindow):
         # Load current autoconnect flag
         auto = False
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             # Default to autoconnect enabled
             auto = s.value("server/autoconnect", True, type=bool)
         except Exception:
@@ -1497,7 +2584,10 @@ class MainWindow(QMainWindow):
             # Friends
             fr = dlg.selected_friends()
             self.friends.set_friends(fr)
-            self.bridge.setMonitorList(fr)
+            try:
+                self._schedule_async(self.bridge.setMonitorList, fr)
+            except Exception:
+                pass
             # Network prefs
             try:
                 self._auto_negotiate = dlg.selected_auto_negotiate()
@@ -1510,7 +2600,7 @@ class MainWindow(QMainWindow):
             # Persist
         try:
             # Save autoconnect flag only (server details saved via Connect dialog)
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             s.setValue("server/autoconnect", dlg.selected_autoconnect())
         except Exception:
             pass
@@ -1520,7 +2610,7 @@ class MainWindow(QMainWindow):
     def _save_server_settings(self, host: str, port: int, tls: bool, nick: str, user: str, realname: str,
                                channels: list[str], autoconnect: bool, password: str | None, sasl_user: str | None) -> None:
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             s.setValue("server/host", host)
             s.setValue("server/port", int(port))
             s.setValue("server/tls", bool(tls))
@@ -1539,7 +2629,7 @@ class MainWindow(QMainWindow):
 
     def _load_server_settings(self) -> tuple | None:
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             # Defaults point to debauchedtea.party:1337 (TLS enabled)
             host = s.value("server/host", "debauchedtea.party", type=str)
             port = s.value("server/port", 1337, type=int)
@@ -1553,7 +2643,7 @@ class MainWindow(QMainWindow):
             # Default autoconnect enabled
             autoconnect = s.value("server/autoconnect", True, type=bool)
             if host and nick:
-                return host, int(port), bool(tls), nick, user or "peach", realname or "Peach Client", list(channels), password, sasl_user, bool(autoconnect)
+                return host, int(port), bool(tls), nick, user or "deadhop", realname or "DeadHop", list(channels), password, sasl_user, bool(autoconnect)
         except Exception:
             pass
         return None
@@ -1595,9 +2685,7 @@ class MainWindow(QMainWindow):
 
     def _set_word_wrap(self, en: bool) -> None:
         self._word_wrap = bool(en)
-        self.chat.setLineWrapMode(
-            QTextEdit.LineWrapMode.WidgetWidth if self._word_wrap else QTextEdit.LineWrapMode.NoWrap
-        )
+        self._init_chat_webview()
         try:
             self.act_wrap.setChecked(self._word_wrap)
         except Exception:
@@ -1612,7 +2700,8 @@ class MainWindow(QMainWindow):
 
     # ----- QoL actions -----
     def _clear_buffer(self) -> None:
-        self.chat.clear()
+        # Reset the chat document
+        self._init_chat_webview()
 
     def _close_current_channel(self) -> None:
         cur = self.bridge.current_channel() or ""
@@ -1649,18 +2738,13 @@ class MainWindow(QMainWindow):
         action = action.lower()
         if action == "whois":
             # Try to send raw WHOIS if bridge supports it
-            sent = False
-            for meth in ("sendRaw", "sendCommand"):
-                fn = getattr(self.bridge, meth, None)
-                if callable(fn):
-                    try:
-                        fn(f"WHOIS {nick}")
-                        sent = True
-                        break
-                    except Exception:
-                        pass
-            if not sent:
-                self.chat.append(f"<i>WHOIS {nick} (not sent: no raw command API)</i>")
+            try:
+                self._send_raw(f"WHOIS {nick}")
+            except Exception:
+                try:
+                    self._chat_append(f"<i>WHOIS {nick} (not sent: no raw command API)</i>")
+                except Exception:
+                    pass
         elif action == "query":
             label = f"[PM:{nick}]"
             try:
@@ -1736,17 +2820,14 @@ class MainWindow(QMainWindow):
     def _on_find(self, pattern: str, forward: bool) -> None:
         if not pattern:
             return
-        flags = QTextDocument.FindFlag(0) if forward else QTextDocument.FindFlag.FindBackward
         try:
-            self.chat.find(pattern, flags)
+            from PyQt6.QtWebEngineCore import QWebEnginePage
+            flags = QWebEnginePage.FindFlag(0)
+            if not forward:
+                flags = QWebEnginePage.FindFlag.FindBackward
+            self.chat.page().findText(pattern, flags)
         except Exception:
-            # Fallback: simple contains -> move cursor to end/start
-            c = self.chat.textCursor()
-            if forward:
-                c.movePosition(c.MoveOperation.End)
-            else:
-                c.movePosition(c.MoveOperation.Start)
-            self.chat.setTextCursor(c)
+            pass
 
     # ----- Theme helpers -----
     def _apply_theme(self, name: str) -> None:
@@ -1757,6 +2838,11 @@ class MainWindow(QMainWindow):
         tm.apply()
         self._current_theme = name
         self._sync_theme_actions()
+        # Sync chat view colors with current palette
+        try:
+            self._apply_chat_theme()
+        except Exception:
+            pass
 
     def _apply_rounded_corners(self, radius_px: int = 8) -> None:
         """Append a minimal global stylesheet to enforce rounded corners consistently.
@@ -1827,6 +2913,11 @@ class MainWindow(QMainWindow):
                 self._apply_rounded_corners(8)
             except Exception:
                 pass
+            # Push palette-derived colors into chat webview
+            try:
+                self._apply_chat_theme()
+            except Exception:
+                pass
 
     def _sync_theme_actions(self) -> None:
         # Reflect current theme selection in checkable actions
@@ -1880,7 +2971,17 @@ class MainWindow(QMainWindow):
         # Route to chat only if matches current channel
         cur = self.bridge.current_channel()
         if target and target == cur:
-            self.chat.append(self._format_message_html(nick, self._strip_irc_codes(text), ts))
+            try:
+                msg = text or ""
+                # CTCP ACTION formatting: \x01ACTION ...\x01 -> "* nick ..."
+                if msg.startswith("\x01ACTION ") and msg.endswith("\x01"):
+                    act = msg[len("\x01ACTION "):-1].strip()
+                    rendered = self._format_message_html(nick, f"* {act}", ts)
+                else:
+                    rendered = self._format_message_html(nick, self._strip_irc_codes(msg), ts)
+                self._chat_append(rendered)
+            except Exception:
+                pass
         # URL grabber
         try:
             self.url_grabber.add_from_text(self._strip_irc_codes(text))
@@ -1901,7 +3002,22 @@ class MainWindow(QMainWindow):
                         hl = True
                         break
             if hl:
+                # mark highlight specially (could style badge differently)
                 self._highlights[target] = self._highlights.get(target, 0) + 1
+                # Notification on highlight
+                try:
+                    ch = target.split(':', 1)[-1]
+                    self._notify_event(f"Mention in {ch}", f"{nick}: {self._strip_irc_codes(text)}", highlight=True)
+                except Exception:
+                    pass
+            else:
+                # Non-highlight unread notification (only when not current)
+                if target != cur:
+                    try:
+                        ch = target.split(':', 1)[-1]
+                        self._notify_event(f"New message in {ch}", f"{nick}: {self._strip_irc_codes(text)}", highlight=False)
+                    except Exception:
+                        pass
                 # tray notification
                 try:
                     if self.tray is not None:
@@ -1926,17 +3042,188 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _on_names(self, channel: str, names: list[str]) -> None:
-        self.members.set_members(names)
-        # Provide names to composer for tab completion
+    def _on_status(self, s: str) -> None:
+        # Expect format like "[net] message"; persist and show when that network is selected in the server tree
         try:
-            self.composer.set_completion_names(names)
+            net = None
+            msg = s or ""
+            if msg.startswith("[") and "]" in msg:
+                net = msg.split("]", 1)[0][1:]
+                msg = msg.split("]", 1)[1].strip()
+            if not net:
+                return
+            # Persist raw status lines per-network
+            buf = self._status_by_net.setdefault(net, [])
+            buf.append(msg)
+            if len(buf) > 500:
+                del buf[:-500]
+            # If the network (top item) is currently selected, render live
+            try:
+                if getattr(self, "_selected_network", None) == net:
+                    html = f"<span class='sys'><i>{self._strip_irc_codes(msg)}</i></span>"
+                    self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_network_selected(self, net: str) -> None:
+        try:
+            # Mark selected network and clear channel selection context
+            self._selected_network = net
+            # Show just the server name when no channel is selected
+            self.members.set_members([net])
+            try:
+                self.members.title.setText("Server")
+            except Exception:
+                pass
+            # Clear chat view and replay server status buffer for this net
+            try:
+                self.chat.page().runJavaScript("(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();")
+            except Exception:
+                pass
+            try:
+                lines = list(self._status_by_net.get(net, []))
+                for m in lines:
+                    html = f"<span class='sys'><i>{self._strip_irc_codes(m)}</i></span>"
+                    self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_names(self, channel: str, names: list[str]) -> None:
+        # Merge incremental updates into cache keyed by channel label
+        try:
+            existing = set(self._names_by_channel.get(channel, []))
+            incoming = set(names or [])
+            merged = sorted(existing.union(incoming))
+            self._names_by_channel[channel] = merged
+        except Exception:
+            # Fallback: replace cache
+            self._names_by_channel[channel] = list(names or [])
+        # Only update the visible list if this channel is the active one
+        cur = self.bridge.current_channel()
+        if cur and channel == cur:
+            current = self._names_by_channel.get(channel, list(names or []))
+            self.members.set_members(list(current))
+            # Provide names to composer for tab completion
+            try:
+                self.composer.set_completion_names(list(current))
+            except Exception:
+                pass
+
+    # ----- Typed IRC event handlers (JOIN/PART/QUIT/NICK/TOPIC/MODE) -----
+    def _channel_emit(self, comp: str, text: str) -> None:
+        try:
+            if not comp:
+                return
+            sb = self._scrollback.setdefault(comp, [])
+            html = f"<span class='sys'><i>{self._strip_irc_codes(text)}</i></span>"
+            sb.append(html)
+            if len(sb) > self._scrollback_limit:
+                del sb[:-self._scrollback_limit]
+            if (self.bridge.current_channel() or "") == comp:
+                self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+            else:
+                # bump unread
+                try:
+                    self._unread[comp] = self._unread.get(comp, 0) + 1
+                    self.sidebar.set_unread(comp, self._unread[comp], self._highlights.get(comp, 0))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _members_add(self, comp: str, who: str) -> None:
+        try:
+            names = set(self._names_by_channel.get(comp, []))
+            if who not in names:
+                names.add(who)
+                self._names_by_channel[comp] = sorted(names)
+                if (self.bridge.current_channel() or "") == comp:
+                    self.members.set_members(list(self._names_by_channel[comp]))
+                    self.composer.set_completion_names(list(self._names_by_channel[comp]))
+        except Exception:
+            pass
+
+    def _members_remove(self, comp: str, who: str) -> None:
+        try:
+            names = list(self._names_by_channel.get(comp, []))
+            if who in names:
+                names = [x for x in names if x != who]
+                self._names_by_channel[comp] = names
+                if (self.bridge.current_channel() or "") == comp:
+                    self.members.set_members(list(names))
+                    self.composer.set_completion_names(list(names))
+        except Exception:
+            pass
+
+    def _on_user_joined(self, comp: str, nick: str) -> None:
+        ch = comp.split(":", 1)[1] if ":" in comp else comp
+        self._channel_emit(comp, f"• {nick} joined {ch}")
+        self._members_add(comp, nick)
+
+    def _on_user_parted(self, comp: str, nick: str) -> None:
+        ch = comp.split(":", 1)[1] if ":" in comp else comp
+        self._channel_emit(comp, f"• {nick} left {ch}")
+        self._members_remove(comp, nick)
+
+    def _on_user_quit(self, net: str, nick: str) -> None:
+        try:
+            for comp, names in list(self._names_by_channel.items()):
+                if not comp.startswith(f"{net}:"):
+                    continue
+                if nick in names:
+                    self._channel_emit(comp, f"• {nick} quit")
+                    self._members_remove(comp, nick)
+        except Exception:
+            pass
+
+    def _on_user_nick_changed(self, net: str, old: str, new: str) -> None:
+        try:
+            for comp, names in list(self._names_by_channel.items()):
+                if not comp.startswith(f"{net}:"):
+                    continue
+                if old in names:
+                    self._channel_emit(comp, f"• {old} is now known as {new}")
+                    updated = [new if x == old else x for x in names]
+                    self._names_by_channel[comp] = sorted(set(updated))
+                    if (self.bridge.current_channel() or "") == comp:
+                        self.members.set_members(list(self._names_by_channel[comp]))
+                        self.composer.set_completion_names(list(self._names_by_channel[comp]))
+        except Exception:
+            pass
+
+    def _on_channel_topic(self, comp: str, actor: str, topic: str) -> None:
+        self._channel_emit(comp, f"• {actor} set topic: {topic}")
+
+    def _on_channel_mode(self, comp: str, actor: str, modes: str) -> None:
+        ch = comp.split(":", 1)[1] if ":" in comp else comp
+        self._channel_emit(comp, f"• mode/{ch} {modes}")
+
+    def _on_channel_mode_users(self, comp: str, changes: list) -> None:
+        # Summarize user mode changes, e.g., +o nick, -v nick
+        try:
+            parts = []
+            for add, mode, nick in changes:
+                sign = "+" if add else "-"
+                parts.append(f"{sign}{mode} {nick}")
+            if parts:
+                ch = comp.split(":", 1)[1] if ":" in comp else comp
+                self._channel_emit(comp, f"• mode/{ch} " + " ".join(parts))
         except Exception:
             pass
 
     def _on_channel_clicked(self, ch: str) -> None:
         if ch:
+            # If user clicks the same channel after selecting the server node,
+            # BridgeQt may suppress the signal (no change). Force a refresh.
+            cur = self.bridge.current_channel()
             self.bridge.set_current_channel(ch)
+            if ch == cur:
+                # Manually trigger population of members/composer and sidebar state
+                self._on_current_channel_changed(ch)
 
     def _connect_default(self) -> None:
         # Optionally read defaults from a config later
@@ -1948,12 +3235,12 @@ class MainWindow(QMainWindow):
         try:
             import random
             nick = f"DeadRabbit{random.randint(1000, 9999)}"
-            self._schedule_async(self.bridge.connectHost, "irc.libera.chat", 6697, True, nick, "peach", "Peach Client", channels, None, None, False)
+            self._schedule_async(self.bridge.connectHost, "irc.libera.chat", 6697, True, nick, "deadhop", "DeadHop", channels, None, None, False)
         except Exception:
             try:
                 import random
                 nick = f"DeadRabbit{random.randint(1000, 9999)}"
-                self.bridge.connectHost("irc.anonops.com", 6697, True, nick, "peach", "Peach Client", channels, None, None, False)
+                self.bridge.connectHost("irc.anonops.com", 6697, True, nick, "deadhop", "DeadHop", channels, None, None, False)
             except Exception:
                 pass
 
@@ -1966,6 +3253,8 @@ class MainWindow(QMainWindow):
             # Harden: normalize host before resolving policy
             host = self._normalize_host(host)
             host, port, tls = self._resolve_connect_policy(host, port, tls)
+            if not nick:
+                nick = self._default_nick()
             # Persist if requested
             if remember:
                 self._save_server_settings(host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user)
@@ -2199,7 +3488,7 @@ class MainWindow(QMainWindow):
                 return
             ack = sorted(st.get('ack') or [])
             host = st.get('host') or ''
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             # Legacy
             s.setValue("server/capabilities_enabled", ack)
             # Host-scoped
@@ -2210,7 +3499,7 @@ class MainWindow(QMainWindow):
     # ----- Multi-server storage (QSettings: group 'servers') -----
     def _servers_list(self) -> list[str]:
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             names = s.value("servers/names", [], type=list) or []
             return list(names)
         except Exception:
@@ -2220,7 +3509,7 @@ class MainWindow(QMainWindow):
                       channels: list[str], autoconnect: bool, password: str | None, sasl_user: str | None,
                       ignore_invalid_certs: bool = False) -> None:
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             names = set(self._servers_list())
             names.add(name)
             s.setValue("servers/names", list(names))
@@ -2243,7 +3532,7 @@ class MainWindow(QMainWindow):
 
     def _servers_load(self, name: str) -> tuple | None:
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             base = f"servers/{name}"
             host = s.value(base + "/host", type=str)
             if not host:
@@ -2258,13 +3547,13 @@ class MainWindow(QMainWindow):
             sasl_user = s.value(base + "/sasl_user", None, type=str)
             autoconnect = s.value(base + "/autoconnect", False, type=bool)
             ignore_invalid_certs = s.value(base + "/ignore_invalid_certs", False, type=bool)
-            return host, int(port), bool(tls), nick, user or "peach", realname or "Peach Client", list(channels), password, sasl_user, bool(autoconnect), bool(ignore_invalid_certs)
+            return host, int(port), bool(tls), nick, user or "deadhop", realname or "DeadHop", list(channels), password, sasl_user, bool(autoconnect), bool(ignore_invalid_certs)
         except Exception:
             return None
 
     def _servers_delete_name(self, name: str) -> None:
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             names = [n for n in self._servers_list() if n != name]
             s.setValue("servers/names", names)
             base = f"servers/{name}"
@@ -2297,7 +3586,7 @@ class MainWindow(QMainWindow):
 
     def _servers_set_autoconnect_name(self, name: str | None) -> None:
         try:
-            s = QSettings("Peach", "PeachClient")
+            s = QSettings("DeadHop", "DeadHopClient")
             for n in self._servers_list():
                 base = f"servers/{n}"
                 s.setValue(base + "/autoconnect", bool(name and n == name))
@@ -2320,6 +3609,8 @@ class MainWindow(QMainWindow):
         host, port, tls, nick, user, realname, chans, password, sasl_user, _auto, ignore = data
         # Record current saved server name for persistence of channels
         self._current_server_name = name
+        if not nick:
+            nick = self._default_nick()
         host = self._normalize_host(host)
         host, port, tls = self._resolve_connect_policy(host, port, tls)
         if tls:
@@ -2454,7 +3745,7 @@ class MainWindow(QMainWindow):
                 self.bridge.set_current_channel(self._channel_labels[0])
             # Persist the channel list for autoconnect on next run
             try:
-                s = QSettings("Peach", "PeachClient")
+                s = QSettings("DeadHop", "DeadHopClient")
                 # Extract plain channel names for the current network only
                 # Bridge emits composite labels like "net:#chan". We shouldn't persist those.
                 cur = self.bridge.current_channel() or ""
@@ -2492,6 +3783,11 @@ class MainWindow(QMainWindow):
         # Reset unread count for the active channel and update sidebar badge
         try:
             if ch:
+                # Clear network selection context when a channel is selected
+                try:
+                    self._selected_network = None
+                except Exception:
+                    pass
                 self._unread[ch] = 0
                 hl = self._highlights.get(ch, 0)
                 try:
@@ -2503,6 +3799,22 @@ class MainWindow(QMainWindow):
                     sel = getattr(self.sidebar, 'select_channel', None)
                     if callable(sel):
                         sel(ch)
+                except Exception:
+                    pass
+                # Clear chat view and replay scrollback for the selected label (channel or server)
+                try:
+                    self.chat.page().runJavaScript("(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();")
+                except Exception:
+                    pass
+                try:
+                    self._replay_scrollback(ch)
+                except Exception:
+                    pass
+                # Refresh members list and completion names from cache, if available
+                try:
+                    names = self._names_by_channel.get(ch, [])
+                    self.members.set_members(list(names))
+                    self.composer.set_completion_names(list(names))
                 except Exception:
                     pass
                 self.status.showMessage(f"Switched to {ch}", 1500)
@@ -2529,10 +3841,13 @@ class MainWindow(QMainWindow):
                 pass
         # Switch to AI channel
         self.bridge.set_current_channel(label)
-        self.chat.append(f"<i>AI session started with model: {model.strip()}</i>")
+        try:
+            self._chat_append(f"<i>AI session started with model: {model.strip()}</i>")
+        except Exception:
+            pass
         # Auto greet to verify connectivity
         try:
-            self.chat.append("<i>Peach:</i> sending hello…")
+            self._chat_append("<i>DeadHop:</i> sending hello…")
             self._run_ai_inference(label, "hello")
         except Exception:
             pass
@@ -2558,7 +3873,10 @@ class MainWindow(QMainWindow):
         self._ai_worker.done.connect(self._ai_thread.quit)
         self._ai_worker.error.connect(self._ai_thread.quit)
         # Start stream and show AI header line
-        self.chat.append("<b>AI:</b> ")
+        try:
+            self._chat_start_ai_line()
+        except Exception:
+            pass
         # reset buffer for routing
         self._ai_accum = ""
         self._ai_stream_open = True
@@ -2566,10 +3884,10 @@ class MainWindow(QMainWindow):
 
     def _ai_chunk(self, text: str) -> None:
         # Append incremental text to the last line
-        cursor = self.chat.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.insertText(text)
-        self.chat.setTextCursor(cursor)
+        try:
+            self._chat_ai_chunk(text)
+        except Exception:
+            pass
         # Accumulate for routing if enabled and stream out on thresholds
         if self._ai_route_target:
             self._ai_accum += text

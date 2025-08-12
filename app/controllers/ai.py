@@ -3,11 +3,11 @@ from pathlib import Path
 
 import requests
 
-DATA_DIR = Path.home() / ".peachbot_local"
+DATA_DIR = Path.home() / ".deadhop_local"
 CONFIG_PATH = DATA_DIR / "config.json"
 
 
-class PeachAI:
+class DeadHopAI:
     def __init__(self):
         self.cfg = self._load()
 
@@ -19,8 +19,8 @@ class PeachAI:
             return {}
 
     def call_local_llm(self, system_prompt: str, user_content: str) -> str:
-        base = self.cfg.get("peach", {}).get("api_base", "http://127.0.0.1:11434")
-        model = self.cfg.get("peach", {}).get("model", "peach-gemma-merged")
+        base = self.cfg.get("deadhop", {}).get("api_base", "http://127.0.0.1:11434")
+        model = self.cfg.get("deadhop", {}).get("model", "llama3:8b")
         url = f"{base}/api/chat"
         payload = {
             "model": model,
@@ -41,4 +41,7 @@ class PeachAI:
                 parts = ((ch or {}).get("message") or {}).get("content", "")
             return parts or ""
         except Exception as e:
-            return f"[PeachAI] Error calling local LLM: {e}"
+            return f"[DeadHopAI] Error calling local LLM: {e}"
+
+# Backwards-compat alias
+PeachAI = DeadHopAI

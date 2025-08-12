@@ -16,6 +16,14 @@ class BridgeQt(QObject):
     channelsUpdated = pyqtSignal(list)
     monitorOnline = pyqtSignal(list)  # list of nicks
     monitorOffline = pyqtSignal(list)  # list of nicks
+    # Typed events from IRCManager (network-aware)
+    userJoined = pyqtSignal(str, str)  # composite channel, nick
+    userParted = pyqtSignal(str, str)  # composite channel, nick
+    userQuit = pyqtSignal(str, str)    # net, nick
+    userNickChanged = pyqtSignal(str, str, str)  # net, old, new
+    channelTopic = pyqtSignal(str, str, str)  # composite channel, actor, topic
+    channelMode = pyqtSignal(str, str, str)   # composite channel, actor, modes_with_args
+    channelModeUsers = pyqtSignal(str, list)  # composite channel, [(add, mode, nick)]
 
     def __init__(self):
         super().__init__()
@@ -39,9 +47,9 @@ class BridgeQt(QObject):
         host: str,
         port: int = 6697,
         tls: bool = True,
-        nick: str = "PeachUser",
+        nick: str = "DeadHopUser",
         user: str = "peach",
-        realname: str = "Peach Client",
+        realname: str = "DeadHop",
         channels: Iterable[str] | None = None,
         password: str | None = None,
         sasl_user: str | None = None,
@@ -87,6 +95,13 @@ class BridgeQt(QObject):
         irc.on_status = lambda s, _net=net: self.statusChanged.emit(f"[{_net}] {s}")
         irc.on_message = lambda n, t, x, ts, _net=net: self.messageReceived.emit(n, f"{_net}:{t}", x, ts)
         irc.on_names = lambda ch, ns, _net=net: self.namesUpdated.emit(f"{_net}:{ch}", ns)
+        irc.on_join = lambda ch, nick, _net=net: self.userJoined.emit(f"{_net}:{ch}", nick)
+        irc.on_part = lambda ch, nick, _net=net: self.userParted.emit(f"{_net}:{ch}", nick)
+        irc.on_quit = lambda nick, _net=net: self.userQuit.emit(_net, nick)
+        irc.on_nick = lambda old, new, _net=net: self.userNickChanged.emit(_net, old, new)
+        irc.on_topic = lambda ch, actor, topic, _net=net: self.channelTopic.emit(f"{_net}:{ch}", actor, topic)
+        irc.on_mode_channel = lambda ch, actor, modes, _net=net: self.channelMode.emit(f"{_net}:{ch}", actor, modes)
+        irc.on_mode_users = lambda ch, changes, _net=net: self.channelModeUsers.emit(f"{_net}:{ch}", changes)
         irc.on_monitor_online = lambda nicks: self.monitorOnline.emit(nicks)
         irc.on_monitor_offline = lambda nicks: self.monitorOffline.emit(nicks)
         try:
@@ -121,9 +136,13 @@ class BridgeQt(QObject):
         irc = self._ircs.get(net)
         if not irc:
             return
-        await irc.send_privmsg(ch, text)
-        # Echo message locally to the composite target
-        self.messageReceived.emit("You", f"{net}:{ch}", text, asyncio.get_event_loop().time())
+        try:
+            await irc.send_privmsg(ch, text)
+        except Exception as e:
+            # Avoid bubbling to qasync error handler; report nicely
+            self.statusChanged.emit(f"[{net}] Send failed to {ch}: {type(e).__name__}: {e}")
+            return
+        # Do not locally echo; rely on server echo (CAP echo-message) to avoid duplicates
 
     @asyncSlot(str, str)
     async def sendMessageTo(self, composite: str, text: str) -> None:
@@ -137,8 +156,12 @@ class BridgeQt(QObject):
         irc = self._ircs.get(net)
         if not irc:
             return
-        await irc.send_privmsg(ch, text)
-        self.messageReceived.emit("You", f"{net}:{ch}", text, asyncio.get_event_loop().time())
+        try:
+            await irc.send_privmsg(ch, text)
+        except Exception as e:
+            self.statusChanged.emit(f"[{net}] Send failed to {ch}: {type(e).__name__}: {e}")
+            return
+        # Do not locally echo; rely on server echo (CAP echo-message) to avoid duplicates
 
     @asyncSlot(str)
     async def sendRaw(self, line: str) -> None:
@@ -196,6 +219,15 @@ class BridgeQt(QObject):
             return
         try:
             await irc.join(ch)
+            # Request topic and names promptly to populate UI faster
+            try:
+                await irc._send(f"TOPIC {ch}")
+            except Exception:
+                pass
+            try:
+                await irc._send(f"NAMES {ch}")
+            except Exception:
+                pass
         except Exception as e:
             self.statusChanged.emit(f"[{net}] JOIN {ch} failed: {e}")
             return
@@ -253,3 +285,27 @@ class BridgeQt(QObject):
             await irc.set_modes(ch, modes)
         except Exception as e:
             self.statusChanged.emit(f"[{net}] MODE change failed in {ch}: {e}")
+
+    @asyncSlot(str)
+    async def setMyModes(self, modes: str) -> None:
+        """Set user modes for my own nick on the current network.
+
+        Example: "+i", "-i", "+x", "-x", or combinations like "+ix".
+        """
+        if not modes:
+            return
+        # Determine current network from current channel selection
+        net = None
+        cur = self._current_channel or ""
+        if cur and ':' in cur and not cur.startswith('['):
+            net = cur.split(':', 1)[0]
+        if not net or net not in self._ircs:
+            return
+        irc = self._ircs[net]
+        nick = getattr(irc.p, 'nick', None) or getattr(irc, 'nick', None)
+        if not nick:
+            return
+        try:
+            await irc._send(f"MODE {nick} {modes}")
+        except Exception as e:
+            self.statusChanged.emit(f"[{net}] USER MODE change failed: {e}")

@@ -1,17 +1,20 @@
 from __future__ import annotations
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QPoint
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLineEdit, QLabel
+    QPushButton, QLineEdit, QLabel, QMenu, QFileDialog
 )
+from .avatars import make_avatar_icon
 
 class FriendsDock(QWidget):
     friendsChanged = pyqtSignal(list)  # emits full list
+    avatarsChanged = pyqtSignal(dict)  # emits {nick: path}
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._all_friends: set[str] = set()
         self._online: set[str] = set()
+        self._avatars: dict[str, str | None] = {}
 
         v = QVBoxLayout(self)
         v.setContentsMargins(6, 6, 6, 6)
@@ -21,6 +24,8 @@ class FriendsDock(QWidget):
         v.addWidget(title)
 
         self.list = QListWidget(self)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._open_menu)
         v.addWidget(self.list, 1)
 
         # Controls: add/remove
@@ -50,6 +55,14 @@ class FriendsDock(QWidget):
             self._online.difference_update(online_remove)
         self._refresh()
 
+    def set_presence(self, online: set[str] | list[str]) -> None:
+        self._online = set(online)
+        self._refresh()
+
+    def set_avatars(self, avatars: dict[str, str | None]) -> None:
+        self._avatars = dict(avatars or {})
+        self._refresh()
+
     def _add(self) -> None:
         n = self.input.text().strip()
         if not n:
@@ -77,7 +90,30 @@ class FriendsDock(QWidget):
     def _refresh(self) -> None:
         self.list.clear()
         for nick in sorted(self._all_friends):
-            prefix = "● " if nick in self._online else "○ "
-            item = QListWidgetItem(f"{prefix}{nick}")
+            item = QListWidgetItem(nick)
             item.setData(Qt.ItemDataRole.UserRole, nick)
+            # avatar + presence dot
+            path = self._avatars.get(nick)
+            item.setIcon(make_avatar_icon(nick, path, 24, nick in self._online))
             self.list.addItem(item)
+
+    def _open_menu(self, pos: QPoint) -> None:
+        it = self.list.itemAt(pos)
+        if not it:
+            return
+        nick = it.data(Qt.ItemDataRole.UserRole)
+        m = QMenu(self)
+        act_set = m.addAction("Set Avatar…")
+        act_clear = m.addAction("Clear Avatar")
+        act = m.exec(self.list.mapToGlobal(pos))
+        if act == act_set:
+            fn, _ = QFileDialog.getOpenFileName(self, "Choose Avatar", filter="Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+            if fn:
+                self._avatars[nick] = fn
+                self._refresh()
+                self.avatarsChanged.emit(dict(self._avatars))
+        elif act == act_clear:
+            if nick in self._avatars:
+                self._avatars[nick] = None
+                self._refresh()
+                self.avatarsChanged.emit(dict(self._avatars))

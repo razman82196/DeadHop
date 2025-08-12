@@ -1,6 +1,7 @@
 from __future__ import annotations
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QTextEdit, QPushButton
+from PyQt6.QtCore import QSize
 try:
     from rapidfuzz import process as rf_process
 except Exception:  # optional dependency
@@ -17,11 +18,30 @@ class Composer(QWidget):
         layout.setSpacing(6)
 
         self.input = QTextEdit(self)
-        self.input.setPlaceholderText("Type a message… (Enter to send, Shift+Enter for newline)")
+        self.input.setPlaceholderText("Type a message… (Enter to send)")
         self.input.setAcceptRichText(False)
         # Ensure Tab is used for completion instead of moving focus
         self.input.setTabChangesFocus(False)
-        self.input.setMinimumHeight(56)
+        # Single-line behavior: no wrapping, no scrollbars, fixed height to one line
+        try:
+            self.input.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        except Exception:
+            pass
+        try:
+            self.input.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.input.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        except Exception:
+            pass
+        try:
+            fm = self.input.fontMetrics()
+            # Make the input approximately twice the previous height
+            base = fm.lineSpacing()
+            line_h = int(base * 2.7) + 12  # ~2x previous size + a bit more padding
+            self.input.setFixedHeight(line_h)
+            self.setMinimumHeight(line_h)
+        except Exception:
+            # Fallback for platforms without metrics
+            self.input.setFixedHeight(68)
         layout.addWidget(self.input, 1)
 
         self.btn = QPushButton("Send", self)
@@ -39,16 +59,17 @@ class Composer(QWidget):
     def eventFilter(self, obj, ev):  # type: ignore[override]
         if obj is self.input and ev.type() == ev.Type.KeyPress:
             if ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                if not (ev.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-                    self._submit()
-                    return True
+                # Always submit on Enter; prevent newline insertion
+                self._submit()
+                return True
             if ev.key() == Qt.Key.Key_Tab:
                 self._handle_tab(forward=not (ev.modifiers() & Qt.KeyboardModifier.ShiftModifier))
                 return True
         return super().eventFilter(obj, ev)
 
     def _submit(self) -> None:
-        text = self.input.toPlainText().strip()
+        # Replace any newlines with spaces to enforce single-line behavior
+        text = self.input.toPlainText().replace("\n", " ").replace("\r", " ").strip()
         if text:
             self.messageSubmitted.emit(text)
             self.input.clear()

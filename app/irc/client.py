@@ -8,8 +8,8 @@ class ServerConfig:
     host: str
     port: int = 6697
     tls: bool = True
-    nick: str = "PeachBot"
-    realname: str = "Peach Client"
+    nick: str = "DeadHopBot"
+    realname: str = "DeadHop"
     channels: tuple = ("#peach",)
 
 

@@ -9,7 +9,7 @@ ApplicationWindow {
     visible: true
     width: 1200
     height: 800
-    title: "Peach Client"
+    title: "DeadHop"
 
     property color bg: AppState.theme === "dark" ? "#0f1115" : "#ffffff"
     property color fg: AppState.theme === "dark" ? "#e6e9ef" : "#111318"
@@ -352,7 +352,7 @@ ApplicationWindow {
                 x: 0; y: 0
                 width: parent.width; height: parent.height
                 spacing: 12
-                Label { text: "Peach"; font.bold: true; color: fg; leftPadding: 12 }
+                Label { text: "DeadHop"; font.bold: true; color: fg; leftPadding: 12 }
                 Item { Layout.fillWidth: true }
                 RowLayout {
                     spacing: 8
@@ -609,7 +609,7 @@ ApplicationWindow {
             color: panel
             height: 48
             RowLayout { anchors.fill: parent; anchors.margins: 12; spacing: 12
-                Label { text: Bridge.currentChannel + " — Modern Peach IRC"; color: fg; Layout.fillWidth: true }
+                Label { text: Bridge.currentChannel + " — Modern DeadHop IRC"; color: fg; Layout.fillWidth: true }
                 TextField { placeholderText: "Search"; Layout.preferredWidth: 240 }
             }
         }

@@ -29,7 +29,7 @@ class BrowserDock(QDockWidget):
         base.mkdir(parents=True, exist_ok=True)
         self.profile = QWebEngineProfile(str(base))
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
-        self.profile.setHttpUserAgent(self.profile.httpUserAgent() + " PeachClient/1.0")
+        self.profile.setHttpUserAgent(self.profile.httpUserAgent() + " DeadHopClient/1.0")
 
         self.view = QWebEngineView(self)
         self.view.setPage(self.profile.newPage())
@@ -106,7 +106,7 @@ class BrowserDock(QDockWidget):
         (function(){
             try {
                 const s = document.createElement('style');
-                s.id = 'peach-dark';
+                s.id = 'deadhop-dark';
                 s.textContent = `
                     html, body { background: #121212 !important; color: #e0e0e0 !important; }
                     a { color: #82b1ff !important; }

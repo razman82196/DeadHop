@@ -1,6 +1,6 @@
-# Peach Client (Modern IRC + AI)
+# DeadHop (Modern IRC + AI)
 
-A modern, media-rich IRC client for Windows with a toggleable Peach AI assistant.
+A modern, media-rich IRC client for Windows with a toggleable DeadHop AI assistant.
 
 ## Quick start
 
@@ -16,7 +16,7 @@ python -m app.main
 
 ## AI Assistant (Local LLM via Ollama)
 
-Peach can stream replies from a local LLM using [Ollama](https://ollama.com/). The client talks to Ollama's HTTP API at `http://127.0.0.1:11434` using `app/ai/ollama.py`.
+DeadHop can stream replies from a local LLM using [Ollama](https://ollama.com/). The client talks to Ollama's HTTP API at `http://127.0.0.1:11434` using `app/ai/ollama.py`.
 
 ### Setup
 
@@ -34,9 +34,9 @@ ollama serve
 ollama pull llama3:8b
 ```
 
-### Use in Peach
+### Use in DeadHop
 
-- Launch Peach and open the AI chat: Tools → Start AI Chat.
+- Launch DeadHop and open the AI chat: Tools → Start AI Chat.
 - Type your prompt; streaming responses should appear inline.
 
 Notes:
@@ -52,7 +52,7 @@ Notes:
 
 ## Notes
 - First run creates a user config at `%USERPROFILE%/.peachbot_local/config.json`.
-- The IRC engine and Peach AI are stubbed initially; we will iterate features quickly.
+- The IRC engine and DeadHop AI are stubbed initially; we will iterate features quickly.
 
 ---
 
@@ -112,11 +112,11 @@ Notes:
 ## Paths and Icons
 
 - Icons are loaded from `app/resources/icons/custom/` first using helpers `get_icon()` / `_icon_from_fs()`.
-- Window icon preference: `main app pixels.(svg|png)` under the custom icons folder; fallback to `app/resources/icons/peach.svg`.
+- Window icon preference: `main app pixels.(svg|png)` under the custom icons folder; fallback to `app/resources/icons/deadhop.svg` (then legacy `peach.svg` if missing).
 
 ## Persistence
 
-- Settings use `QSettings("Peach", "PeachClient")` for theme, wrap, timestamps, geometry, servers, friends, and notification prefs.
+- Settings use `QSettings("DeadHop", "DeadHopClient")` for theme, wrap, timestamps, geometry, servers, friends, and notification prefs.
 
 ## Development
 

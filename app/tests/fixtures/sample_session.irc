@@ -1,0 +1,21 @@
+:orion.example.net 001 peach :Welcome to IRC
+:orion.example.net 002 peach :Your host is orion.example.net, running InspIRCd-3
+:orion.example.net 003 peach :This server was created Mon Aug 11 21:00:00 2025
+:orion.example.net 004 peach orion.example.net InspIRCd-3 wxyz ABIYGHZ abiklmnopqrstvz
+:orion.example.net 005 peach CHANTYPES=# PREFIX=(ov)@+ NETWORK=Orion :are supported by this server
+:orion.example.net 375 peach :- orion.example.net Message of the Day -
+:orion.example.net 372 peach :- Welcome to the offline replay fixture
+:orion.example.net 376 peach :End of /MOTD command.
+:alice!user@host JOIN :#general
+:bob!user@host JOIN :#media
+:orion.example.net 332 peach #general :General discussion
+:orion.example.net 353 peach = #general :@alice peach +carol dave
+:orion.example.net 366 peach #general :End of /NAMES list.
+:orion.example.net 332 peach #media :Media, links and videos
+:orion.example.net 353 peach = #media :@bob MediaBot alice
+:orion.example.net 366 peach #media :End of /NAMES list.
+:alice!user@host PRIVMSG #general :Hello peach!
+:bob!user@host PRIVMSG #media :Check this image https://via.placeholder.com/150.png
+:mediabot!bot@host PRIVMSG #media :New video https://www.youtube.com/watch?v=dQw4w9WgXcQ
+:carol!user@host PART #general :gtg
+:orion.example.net MODE #media +o bob

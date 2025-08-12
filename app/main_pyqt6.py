@@ -2,18 +2,41 @@ from __future__ import annotations
 import sys
 import os
 from pathlib import Path
+import asyncio
+
+# Configure Qt WebEngine and OpenGL for GPU acceleration BEFORE any Qt import/app creation.
+# On Windows, prefer ANGLE (D3D11) and enable Chromium GPU path.
+orig = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
+# Remove disabling flags if present
+blocked = {"--disable-gpu", "--disable-software-rasterizer"}
+kept = " ".join(p for p in orig.split() if p and p not in blocked)
+enable = "--enable-gpu --ignore-gpu-blocklist --enable-zero-copy --use-angle=d3d11"
+flags = (kept + " " + enable).strip()
+for extra in ["--log-level=3", "--disable-logging"]:
+    if extra not in flags:
+        flags += (" " + extra)
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = flags
+os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+# Prefer ANGLE/D3D11 for Qt Quick/scene graph (Qt6 RHI); safe no-op on non-Windows.
+os.environ.setdefault("QSG_RHI_BACKEND", "d3d11")
+
+from PyQt6.QtCore import Qt, QCoreApplication
+# Ensure attributes are set before creating QApplication
+try:
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+except Exception:
+    pass
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from qasync import QEventLoop
-import asyncio
 
-APP_NAME = "Peach Client"
+APP_NAME = "DeadHop"
 
 # Locate resources (icons)
 _ICONS_DIR = Path(__file__).resolve().parent / "resources" / "icons"
 _CUSTOM_ICONS_DIR = _ICONS_DIR / "custom"
-_FALLBACK_ICON = _ICONS_DIR / "peach.svg"
+_FALLBACK_ICON = _ICONS_DIR / "deadhop.svg"
 
 def app_icon() -> QIcon:
     """Return the best available application icon.
@@ -32,8 +55,10 @@ def app_icon() -> QIcon:
         # App-specific and peach fallbacks
         _CUSTOM_ICONS_DIR / "main app pixels.svg",
         _CUSTOM_ICONS_DIR / "main app pixels.png",
-        _CUSTOM_ICONS_DIR / "peach.svg",
-        _CUSTOM_ICONS_DIR / "peach.png",
+        _CUSTOM_ICONS_DIR / "deadhop.svg",
+        _CUSTOM_ICONS_DIR / "deadhop.png",
+        _CUSTOM_ICONS_DIR / "peach.svg",  # legacy fallback
+        _CUSTOM_ICONS_DIR / "peach.png",  # legacy fallback
         _FALLBACK_ICON,
     ]
     for p in candidates:

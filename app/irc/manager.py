@@ -12,9 +12,9 @@ class ServerProfile:
     host: str
     port: int = 6697
     tls: bool = True
-    nick: str = "PeachUser"
+    nick: str = "DeadHopUser"
     user: str = "peach"
-    realname: str = "Peach Client"
+    realname: str = "DeadHop"
     channels: list[str] = None
     password: Optional[str] = None  # NickServ or SASL password
     sasl_user: Optional[str] = None  # SASL username (defaults to nick/user)
@@ -47,6 +47,9 @@ class IRCManager:
         self.on_mode_users: Optional[Callable[[str, list[tuple[bool, str, str]]], None]] = (
             None  # (channel, [(add, mode_char, nick)])
         )
+        # Channel mode changes (raw string with args) and topic changes
+        self.on_mode_channel: Optional[Callable[[str, str, str], None]] = None  # (channel, actor, modes_with_args)
+        self.on_topic: Optional[Callable[[str, str, str], None]] = None  # (channel, actor, topic)
         self.on_away: Optional[Callable[[str, Optional[str]], None]] = (
             None  # (nick, away_msg or None)
         )
@@ -187,6 +190,23 @@ class IRCManager:
                     params = " ".join(parts[1:])
                 ucmd = cmd.upper() if cmd else ""
 
+                # TOPIC (moved after parsing cmd/params to avoid unbound locals)
+                if ucmd == "TOPIC":
+                    try:
+                        parts2 = params.split(" ", 1)
+                        ch = parts2[0] if parts2 else ""
+                        topic = (
+                            rest_line.split(" :", 1)[1]
+                            if " :" in rest_line
+                            else (parts2[1] if len(parts2) > 1 else "")
+                        )
+                        actor = prefix.split("!")[0] if "!" in prefix else prefix
+                        if ch and self.on_topic:
+                            self.on_topic(ch, actor, topic)
+                    except Exception:
+                        pass
+                    continue
+
                 # MONITOR responses
                 if cmd == "730":
                     # RPL_MONONLINE: <me> :nick!user@host[,nick!user@host...]
@@ -224,6 +244,14 @@ class IRCManager:
                             # user modes not handled here
                             pass
                         else:
+                            # Emit raw channel mode change (actor and full modes/args)
+                            try:
+                                actor = prefix.split("!")[0] if "!" in prefix else prefix
+                                modes_with_args = " ".join(parts2[1:]) if len(parts2) > 1 else ""
+                                if self.on_mode_channel:
+                                    self.on_mode_channel(ch, actor, modes_with_args)
+                            except Exception:
+                                pass
                             mode_and_args = (rest_line.split(" :", 1)[0].split(" ", 2)[-1]).split()
                             if not mode_and_args:
                                 raise Exception()
@@ -397,6 +425,18 @@ class IRCManager:
                         chans = rest.split(" :", 1)[1].split() if " :" in rest else []
                         st = self._whois_buf.setdefault(nick, {})
                         st.update({"channels": chans})
+                    except Exception:
+                        pass
+                    continue
+                if cmd == "332":
+                    # RPL_TOPIC: <me> <channel> :<topic>
+                    try:
+                        parts2 = rest.split()
+                        ch = parts2[1] if len(parts2) > 1 else ""
+                        topic = rest.split(" :", 1)[1] if " :" in rest else ""
+                        actor = prefix  # server
+                        if ch and self.on_topic:
+                            self.on_topic(ch, actor, topic)
                     except Exception:
                         pass
                     continue

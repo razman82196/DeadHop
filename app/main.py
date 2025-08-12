@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
+import shutil
 from typing import Any, Dict
 
 # Paths are module-level so tests can monkeypatch them easily.
-DATA_DIR: Path = Path.home() / ".peachbot_local"
+DATA_DIR: Path = Path.home() / ".deadhop_local"
 CONFIG_PATH: Path = DATA_DIR / "config.json"
 
 
@@ -30,6 +32,7 @@ def ensure_config() -> Dict[str, Any]:
 
     Tests may monkeypatch DATA_DIR and CONFIG_PATH before calling this.
     """
+    _migrate_legacy_data_dir()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
         cfg = _default_config()
@@ -50,6 +53,27 @@ def _persist_cfg(cfg: Dict[str, Any]) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CONFIG_PATH.open("w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def _migrate_legacy_data_dir() -> None:
+    """One-time migrate ~/.peachbot_local to ~/.deadhop_local.
+    If the old directory exists and the new one does not, attempt rename; otherwise copy.
+    Safe and idempotent.
+    """
+    home = Path(os.path.expanduser("~"))
+    old_dir = home / ".peachbot_local"
+    new_dir = DATA_DIR
+    try:
+        if not old_dir.exists() or new_dir.exists():
+            return
+        try:
+            old_dir.rename(new_dir)
+            return
+        except Exception:
+            pass
+        shutil.copytree(old_dir, new_dir)
+    except Exception:
+        pass
 
 
 def main() -> None:

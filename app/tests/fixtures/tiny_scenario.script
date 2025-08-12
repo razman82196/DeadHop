@@ -1,0 +1,8 @@
+# delay_ms raw IRC line (placeholders like {nick} not expanded here)
+500 :tiny.server PRIVMSG #test :hello from tiny ircd
+800 :tiny.server PRIVMSG #test :image https://via.placeholder.com/200x100.png
+1200 :tiny.server PRIVMSG #test :video https://www.youtube.com/watch?v=dQw4w9WgXcQ
+1400 :tiny.server PRIVMSG #test :gif https://media.tenor.com/_Xx9k.gif
+1800 :tiny.server PRIVMSG #test :link https://example.org/
+1600 :tiny.server MODE #test +o alice
+2000 :tiny.server PRIVMSG #test :goodbye

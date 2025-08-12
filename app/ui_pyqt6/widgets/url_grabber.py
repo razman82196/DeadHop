@@ -54,7 +54,7 @@ class URLGrabber(QWidget):
         async with self._sem:
             try:
                 timeout = httpx.Timeout(5.0, connect=5.0, read=5.0) if httpx else None
-                async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers={"User-Agent": "PeachClient/1.0"}) as client:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers={"User-Agent": "DeadHopClient/1.0"}) as client:
                     r = await client.get(url)
                     if r.status_code >= 400:
                         return

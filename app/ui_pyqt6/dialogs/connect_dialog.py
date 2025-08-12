@@ -18,7 +18,7 @@ class ConnectDialog(QDialog):
         # Default nick: DeadRabbit + random 4-digit number
         self.nick = QLineEdit(self._rand_nick())
         self.user = QLineEdit("peach")
-        self.realname = QLineEdit("Peach Client")
+        self.realname = QLineEdit("DeadHop")
         self.channels = QLineEdit("#peach,#python")
         self.password = QLineEdit("")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -56,7 +56,7 @@ class ConnectDialog(QDialog):
         # Fallback to a fresh random nick if empty
         nick = self.nick.text().strip() or self._rand_nick()
         user = self.user.text().strip() or "peach"
-        realname = self.realname.text().strip() or "Peach Client"
+        realname = self.realname.text().strip() or "DeadHop"
         chans = [c.strip() for c in (self.channels.text().strip() or "").split(",") if c.strip()]
         password = self.password.text().strip() or None
         sasl_user = self.sasl_user.text().strip() or None
