@@ -113,7 +113,7 @@ Notes:
 - ⚡ **Local echo** for select commands for instant feedback.
 - 🔗 **URL Grabber** collects links from chat.
 - 🌐 **Built-in Browser** dock for web content.
-- 🔔 **Notifications**: PMs, mentions, highlight words, joins/parts (configurable).
+- 🔔 **Notifications & Sounds**: PMs, mentions, highlight words, joins/parts (configurable). Dedicated Sounds tab.
 - 🧩 **Plugins** folder opener from Tools menu (auto-created).
 - 🎨 **Theming** via qt-material when available.
 - 🖼️ **Icon loading (filesystem-first)** from `app/resources/icons/custom/` with graceful fallback.
@@ -173,10 +173,30 @@ Notes:
 
 - Icons are loaded from `app/resources/icons/custom/` first using helpers `get_icon()` / `_icon_from_fs()`.
 - Window icon preference: `main app pixels.(svg|png)` under the custom icons folder; fallback to `app/resources/icons/deadhop.svg` (then legacy `peach.svg` if missing).
+- System tray icon has a safe fallback (standard system icon) to avoid "No Icon set" warnings if a window icon is unavailable.
 
 ## 💾 Persistence
 
 - Settings use `QSettings("DeadHop", "DeadHopClient")` for theme, wrap, timestamps, geometry, servers, friends, and notification prefs.
+
+## 🔔 Notifications & Sounds
+
+- Open Settings → Sounds to configure:
+  - Enable/disable toast, tray, and sound notifications.
+  - Pick per-event sounds for normal messages, highlights/mentions, and friend-online presence.
+  - Master volume slider for notification sounds.
+- Supported formats: **WAV** and **OGG** (QSoundEffect). MP3 is not supported and is filtered out.
+- Default sounds: If unset, the app selects sensible defaults from `app/resources/sounds/` (WAV/OGG).
+- Presence alerts: optional sound when a monitored friend comes online.
+- Centralized notifications: all message types route through a single path for consistent toast/tray/sound behavior.
+
+Optional: populate `app/resources/sounds/` with the helper script:
+
+```powershell
+python scripts/download_sounds.py
+```
+
+> Note: If you customize sounds, prefer `.wav` or `.ogg` to avoid decode errors.
 
 ## 🛠️ Development
 
@@ -217,3 +237,4 @@ Artifacts will be placed under a `dist/` folder (as configured by the scripts).
 - If messages appear twice: servers with IRCv3 `echo-message` already echo your text. DeadHop now avoids local-echoing in that case.
 - Icons: you can drop your own into `app/resources/icons/custom/` (PNG/SVG/ICO, etc.).
 - Theme variables: see `app/ui_pyqt6/theme.py` (if present) and the theme manager in `main_window.py`.
+- Sounds: If you see `QSoundEffect(qaudio): Error decoding ... .mp3`, switch to WAV/OGG. The pickers filter to `.wav`/`.ogg` and saved MP3 paths are ignored.

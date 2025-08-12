@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont
-from PyQt6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QMenu, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .avatars import make_avatar_icon
 
@@ -19,12 +26,12 @@ class MembersView(QWidget):
         self.title = QLabel("Members")
         lay.addWidget(self.title)
         self.list = QListWidget(self)
+        # Use default delegate (avoid custom shadow painting to prevent double text)
         # Styling for flair
         self.setStyleSheet(
             """
-            QWidget {
-                background: #0f1116;
-            }
+            QWidget { background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                       stop:0 #0f1116, stop:0.5 #121527, stop:1 #0f1220); }
             QListWidget {
                 border: none;
                 padding: 6px;
@@ -36,7 +43,7 @@ class MembersView(QWidget):
             QListWidget::item:selected {
                 background: rgba(130, 177, 255, 0.18);
             }
-            QLabel { font-weight: 700; color: #e6e6e6; padding: 6px 6px 2px 6px; }
+            QLabel { font-weight: 700; color: #e6e6e6; padding: 6px 6px 2px 6px; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
             """
         )
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -87,33 +94,39 @@ class MembersView(QWidget):
         """Replace the members list with the provided names."""
         self.list.clear()
 
-        # Sort by IRC status prefix
-        def weight(n: str) -> int:
-            if not n:
-                return 99
-            c = n[0]
-            order = {"~": 0, "&": 1, "@": 2, "%": 3, "+": 4}
-            return order.get(c, 9)
-
-        for raw in sorted(names or [], key=lambda x: (weight(x), x.lower())):
-            name = raw
-            # status prefix
+        # Deduplicate case-insensitively, keeping the highest status prefix for each nick
+        order = {"~": 0, "&": 1, "@": 2, "%": 3, "+": 4, "": 9}
+        best: dict[str, tuple[str, str]] = {}
+        for raw in names or []:
+            if not raw:
+                continue
             status = ""
+            name = raw
             if name and name[0] in ("~", "&", "@", "%", "+"):
                 status = name[0]
                 name = name[1:]
-            it = QListWidgetItem(f"{status} {name}" if status else name)
+            base = name.strip()
+            key = base.lower()
+            prev = best.get(key)
+            if not prev or order.get(status, 9) < order.get(prev[0], 9):
+                best[key] = (status, base)
+
+        # Sort by status weight then name
+        items = sorted(best.values(), key=lambda t: (order.get(t[0], 9), t[1].lower()))
+
+        for status, base in items:
+            it = QListWidgetItem(f"{status} {base}" if status else base)
             # Font weight for status
             f = QFont()
             if status in ("~", "&", "@"):
                 f.setBold(True)
             it.setFont(f)
             # Deterministic color per nick
-            col = self._nick_qcolor(name)
+            col = self._nick_qcolor(base)
             it.setForeground(QBrush(col))
             # Avatar icon with presence overlay
-            path = self._avatars.get(name)
-            it.setIcon(make_avatar_icon(name, path, 22, name in self._online, status))
+            path = self._avatars.get(base)
+            it.setIcon(make_avatar_icon(base, path, 22, base in self._online, status))
             # Subtle background hover handled by stylesheet
             self.list.addItem(it)
         self.title.setText("Members")

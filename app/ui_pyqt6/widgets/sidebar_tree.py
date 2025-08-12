@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont
-from PyQt6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
+from PyQt6.QtWidgets import (
+    QMenu,
+    QTreeWidget,
+    QTreeWidgetItem,
+)
 
 
 class SidebarTree(QTreeWidget):
@@ -19,8 +23,16 @@ class SidebarTree(QTreeWidget):
         self.setStyleSheet(
             """
             QTreeWidget {
-                background: #0f1116;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                              stop:0 #0f1116, stop:0.5 #121527, stop:1 #0f1220);
                 border: none;
+            }
+            /* Ensure branch/indicator area matches background so expand arrows blend in */
+            QTreeView::branch {
+                background: transparent;
+            }
+            QTreeView::indicator {
+                background: transparent;
             }
             QTreeWidget::item {
                 height: 22px;
@@ -30,6 +42,7 @@ class SidebarTree(QTreeWidget):
             QTreeWidget::item:selected { background: rgba(167, 139, 250, 0.22); }
             """
         )
+        # Use default delegate (avoid custom shadow painting to prevent double text)
         # Network name -> top-level item
         self._nets: dict[str, QTreeWidgetItem] = {}
         # Full label (e.g. "libera:#peach" or "[AI:llama]") -> item
@@ -163,39 +176,3 @@ def _hash_qcolor(key: str) -> QColor:
         return QColor(int(r * 255), int(g * 255), int(b * 255))
     except Exception:
         return QColor("#a78bfa")
-
-    def _on_click(self, item: QTreeWidgetItem, _col: int) -> None:
-        # Top-level: network selected
-        if item.parent() is None:
-            # Find which network root this is
-            for net, root in self._nets.items():
-                if root is item:
-                    self.networkSelected.emit(net)
-                    return
-        # Reverse map full label
-        for full, it in self._items.items():
-            if it is item:
-                self.channelSelected.emit(full)
-                break
-
-    def _open_menu(self, pos) -> None:
-        item = self.itemAt(pos)
-        if not item or item.parent() is None:
-            return
-        ch = None
-        for name, it in self._items.items():
-            if it is item:
-                ch = name
-                break
-        if not ch:
-            return
-        m = QMenu(self)
-        for label in ["Open Log", "Join", "Part", "Close", "Topic", "Modes"]:
-            act = m.addAction(label)
-            act.triggered.connect(lambda _=False, a=label, c=ch: self.channelAction.emit(c, a))
-        m.exec(self.viewport().mapToGlobal(pos))
-
-    def select_channel(self, ch: str) -> None:
-        it = self._items.get(ch)
-        if it:
-            self.setCurrentItem(it)

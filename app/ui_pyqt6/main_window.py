@@ -94,6 +94,8 @@ def _icon_from_fs(name: str) -> QIcon:
             s.setValue("friends", list(friends or []))
         except Exception:
             pass
+
+        # Settings dialog launcher removed (was incorrectly added here)
         # Update MONITOR list (async)
         try:
             self._schedule_async(self.bridge.setMonitorList, list(friends or []))
@@ -115,6 +117,7 @@ def _icon_from_fs(name: str) -> QIcon:
                 self.friends.set_avatars(self._avatar_map)
             except Exception:
                 pass
+            # No settings dialog handling here; only update avatars in views and persist
             try:
                 self.members.set_avatars(self._avatar_map)
             except Exception:
@@ -161,8 +164,14 @@ def _icon_from_fs(name: str) -> QIcon:
                             pass
                     if getattr(self, "_notify_presence_sound", False):
                         try:
-                            if self._sound_enabled and self._sound is not None:
-                                self._sound.play()
+                            if self._sound_enabled:
+                                se = getattr(self, "_se_presence", None)
+                                if se:
+                                    se.play()
+                                else:
+                                    from PyQt6.QtWidgets import QApplication
+
+                                    QApplication.beep()
                         except Exception:
                             pass
         except Exception:
@@ -290,9 +299,85 @@ class MainWindow(QMainWindow):
             from PyQt6.QtMultimedia import QSoundEffect
 
             self._sound = QSoundEffect(self)
-            self._sound.setSource(QUrl.fromLocalFile(""))  # lazy set later or system sound
+            self._sound.setSource(QUrl.fromLocalFile(""))  # legacy presence beep
+            # Message and highlight sounds
+            self._se_msg = QSoundEffect(self)
+            self._se_hl = QSoundEffect(self)
+            self._se_presence = QSoundEffect(self)
+            try:
+                s = QSettings("DeadHop", "DeadHopClient")
+                msg_path = s.value("notify/sound_msg", "", str)
+                hl_path = s.value("notify/sound_hl", "", str)
+                pr_path = s.value("notify/sound_presence", "", str)
+                vol = float(s.value("notify/sound_volume", 0.7))
+                # Sanitize unsupported formats (QSoundEffect typically supports WAV/OGG). Skip MP3.
+                try:
+
+                    def _ok(p: str) -> bool:
+                        if not p:
+                            return False
+                        ext = Path(p).suffix.lower()
+                        return ext in {".wav", ".ogg"}
+
+                    if msg_path and not _ok(msg_path):
+                        msg_path = ""
+                    if hl_path and not _ok(hl_path):
+                        hl_path = ""
+                    if pr_path and not _ok(pr_path):
+                        pr_path = ""
+                except Exception:
+                    pass
+                # If any are unset, pick sensible defaults from resources/sounds
+                try:
+                    snd_dir = Path(__file__).resolve().parents[1] / "resources" / "sounds"
+                    files: list[str] = []
+                    if snd_dir.exists():
+                        wavs = [str(p) for p in snd_dir.glob("*.wav")]
+                        oggs = [str(p) for p in snd_dir.glob("*.ogg")]
+                        files = wavs + oggs
+
+                    def choose(name_part: str) -> str:
+                        for f in files:
+                            if name_part.lower() in Path(f).name.lower():
+                                return f
+                        return files[0] if files else ""
+
+                    if not msg_path:
+                        cand = choose("message") or choose("sms")
+                        if cand:
+                            msg_path = cand
+                            s.setValue("notify/sound_msg", msg_path)
+                    if not hl_path:
+                        cand = choose("highlight") or choose("whistle") or choose("sms")
+                        if cand:
+                            hl_path = cand
+                            s.setValue("notify/sound_hl", hl_path)
+                    if not pr_path:
+                        cand = choose("presence") or choose("icq") or choose("online")
+                        if cand:
+                            pr_path = cand
+                            s.setValue("notify/sound_presence", pr_path)
+                except Exception:
+                    pass
+                if msg_path:
+                    self._se_msg.setSource(QUrl.fromLocalFile(msg_path))
+                if hl_path:
+                    self._se_hl.setSource(QUrl.fromLocalFile(hl_path))
+                if pr_path:
+                    self._se_presence.setSource(QUrl.fromLocalFile(pr_path))
+                try:
+                    self._se_msg.setVolume(vol)
+                    self._se_hl.setVolume(vol)
+                    self._se_presence.setVolume(vol)
+                except Exception:
+                    pass
+            except Exception:
+                pass
         except Exception:
             self._sound = None
+            self._se_msg = None
+            self._se_hl = None
+            self._se_presence = None
 
         # Central area: sidebar | chat | members using splitters
         central = QWidget(self)
@@ -300,6 +385,20 @@ class MainWindow(QMainWindow):
         root_v = QVBoxLayout(central)
         root_v.setContentsMargins(0, 0, 0, 0)
         root_v.setSpacing(0)
+
+        # Set window/app icon from resources/icons if available
+        try:
+            icons_dir = Path(__file__).resolve().parents[1] / "resources" / "icons"
+            cand = None
+            for ext in (".ico", ".png", ".svg"):  # prefer .ico
+                found = list(icons_dir.glob(f"*{ext}"))
+                if found:
+                    cand = found[0]
+                    break
+            if cand is not None:
+                self.setWindowIcon(QIcon(str(cand)))
+        except Exception:
+            pass
 
         # Top toolbar removed per UI simplification
 
@@ -1257,7 +1356,7 @@ class MainWindow(QMainWindow):
                     .msg:hover { background: rgba(255,255,255,0.05); }
                     .ts { color: #8a8a8a; margin-right: 6px; }
                     .nick { font-weight: 700; color: var(--nick); text-shadow: 0 0 8px color-mix(in oklab, var(--nick) 40%, transparent); }
-                    .msg-text { color: #d8d8d8; }
+                    .msg-text { color: #d8d8d8; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
                     /* Simple context menu */
                     #ctx-menu { position: fixed; z-index: 9999; background: #1e1e1e; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; }
                     #ctx-menu button { background: transparent; color: #eee; border: none; padding: 8px 12px; text-align: left; width: 100%; cursor: pointer; border-radius: 6px; }
@@ -2347,12 +2446,24 @@ class MainWindow(QMainWindow):
             pass
 
     def _init_quick_toolbar(self) -> None:
-        from PyQt6.QtWidgets import QComboBox, QInputDialog, QSlider
+        from PyQt6.QtWidgets import (
+            QComboBox,
+            QFileDialog,
+            QInputDialog,
+            QSizePolicy,
+            QSlider,
+        )
 
         tb = QToolBar("Quick")
         tb.setMovable(False)
         tb.setFloatable(False)
-        tb.setIconSize(QSize(16, 16))
+        # Slightly larger icons for readability
+        tb.setIconSize(QSize(20, 20))
+        # Improve spacing and padding
+        try:
+            tb.setStyleSheet("QToolBar{padding:4px; spacing:8px;} QLabel{padding:0 2px;}")
+        except Exception:
+            pass
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
         # Font size slider
         tb.addWidget(QLabel(" Font "))
@@ -2366,7 +2477,12 @@ class MainWindow(QMainWindow):
         except Exception:
             cur_pt = 12
         sld.setValue(max(9, min(22, int(cur_pt))))
-        sld.setFixedWidth(140)
+        # Let the slider expand to use available space
+        try:
+            sld.setMinimumWidth(180)
+            sld.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        except Exception:
+            pass
 
         def on_font_changed(val: int) -> None:
             try:
@@ -2395,6 +2511,13 @@ class MainWindow(QMainWindow):
         cbo_theme.addItems(themes)
         if self._current_theme and self._current_theme in themes:
             cbo_theme.setCurrentText(self._current_theme)
+        try:
+            cbo_theme.setMinimumWidth(160)
+            from PyQt6.QtWidgets import QComboBox as _QB
+
+            cbo_theme.setSizeAdjustPolicy(_QB.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
+        except Exception:
+            pass
 
         def on_theme(name: str) -> None:
             self._current_theme = name
@@ -2413,6 +2536,10 @@ class MainWindow(QMainWindow):
         cbo_wrap = QComboBox()
         cbo_wrap.addItems(["On", "Off"])
         cbo_wrap.setCurrentText("On" if self._word_wrap else "Off")
+        try:
+            cbo_wrap.setMinimumWidth(90)
+        except Exception:
+            pass
 
         def on_wrap(txt: str) -> None:
             self._word_wrap = txt == "On"
@@ -2537,13 +2664,155 @@ class MainWindow(QMainWindow):
         tb.addWidget(chk_tray)
         tb.addWidget(chk_sound)
 
+        # Sound pickers (message/highlight) and volume
+        try:
+            tb.addWidget(QLabel(" Msg "))
+            btn_msg = QPushButton("Pick…")
+
+            def pick_msg() -> None:
+                try:
+                    fn, _ = QFileDialog.getOpenFileName(
+                        self, "Choose Message Sound", filter="Sounds (*.wav *.ogg)"
+                    )
+                    if fn:
+                        from PyQt6.QtCore import QUrl
+
+                        (
+                            self._se_msg.setSource(QUrl.fromLocalFile(fn))
+                            if getattr(self, "_se_msg", None)
+                            else None
+                        )
+                        s = QSettings("DeadHop", "DeadHopClient")
+                        s.setValue("notify/sound_msg", fn)
+                except Exception:
+                    pass
+
+            btn_msg.clicked.connect(pick_msg)
+            tb.addWidget(btn_msg)
+
+            tb.addWidget(QLabel(" HL "))
+            btn_hl = QPushButton("Pick…")
+
+            def pick_hl() -> None:
+                try:
+                    fn, _ = QFileDialog.getOpenFileName(
+                        self, "Choose Highlight Sound", filter="Sounds (*.wav *.ogg)"
+                    )
+                    if fn:
+                        from PyQt6.QtCore import QUrl
+
+                        (
+                            self._se_hl.setSource(QUrl.fromLocalFile(fn))
+                            if getattr(self, "_se_hl", None)
+                            else None
+                        )
+                        s = QSettings("DeadHop", "DeadHopClient")
+                        s.setValue("notify/sound_hl", fn)
+                except Exception:
+                    pass
+
+            btn_hl.clicked.connect(pick_hl)
+            tb.addWidget(btn_hl)
+
+            tb.addWidget(QLabel(" Friend "))
+            btn_pr = QPushButton("Pick…")
+
+            def pick_pr() -> None:
+                try:
+                    fn, _ = QFileDialog.getOpenFileName(
+                        self, "Choose Friend Online Sound", filter="Sounds (*.wav *.ogg)"
+                    )
+                    if fn:
+                        from PyQt6.QtCore import QUrl
+
+                        (
+                            self._se_presence.setSource(QUrl.fromLocalFile(fn))
+                            if getattr(self, "_se_presence", None)
+                            else None
+                        )
+                        s = QSettings("DeadHop", "DeadHopClient")
+                        s.setValue("notify/sound_presence", fn)
+                except Exception:
+                    pass
+
+            btn_pr.clicked.connect(pick_pr)
+            tb.addWidget(btn_pr)
+
+            # Toggle for friend-online sound
+            try:
+                chk_pr = QCheckBox("Friend sound")
+                chk_pr.setChecked(bool(getattr(self, "_notify_presence_sound", False)))
+
+                def on_pr(v: bool) -> None:
+                    try:
+                        self._notify_presence_sound = bool(v)
+                        s = QSettings("DeadHop", "DeadHopClient")
+                        s.setValue("notify/presence_sound", bool(v))
+                    except Exception:
+                        pass
+
+                chk_pr.toggled.connect(on_pr)
+                tb.addWidget(chk_pr)
+            except Exception:
+                pass
+
+            tb.addWidget(QLabel(" Vol "))
+            s_vol = QSlider(Qt.Orientation.Horizontal)
+            s_vol.setMinimum(0)
+            s_vol.setMaximum(100)
+            try:
+                s = QSettings("DeadHop", "DeadHopClient")
+                cur = float(s.value("notify/sound_volume", 0.7))
+            except Exception:
+                cur = 0.7
+            s_vol.setValue(int(cur * 100))
+
+            def on_vol(v: int) -> None:
+                try:
+                    vol = max(0.0, min(1.0, v / 100.0))
+                    if getattr(self, "_se_msg", None):
+                        try:
+                            self._se_msg.setVolume(vol)
+                        except Exception:
+                            pass
+                    if getattr(self, "_se_hl", None):
+                        try:
+                            self._se_hl.setVolume(vol)
+                        except Exception:
+                            pass
+                    if getattr(self, "_se_presence", None):
+                        try:
+                            self._se_presence.setVolume(vol)
+                        except Exception:
+                            pass
+                    s = QSettings("DeadHop", "DeadHopClient")
+                    s.setValue("notify/sound_volume", float(vol))
+                except Exception:
+                    pass
+
+            s_vol.valueChanged.connect(on_vol)
+            s_vol.setFixedWidth(100)
+            tb.addWidget(s_vol)
+        except Exception:
+            pass
+
     def _init_notifications(self) -> None:
         """Initialize tray icon and sound effects (best-effort)."""
         # System tray icon for popups
         try:
             if not hasattr(self, "tray"):
                 self.tray = QSystemTrayIcon(self)
-                self.tray.setIcon(self.windowIcon())
+                # Ensure a valid icon is set to avoid warnings
+                icon = self.windowIcon()
+                try:
+                    if icon.isNull():
+                        from PyQt6.QtWidgets import QStyle
+
+                        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+                        self.setWindowIcon(icon)
+                except Exception:
+                    pass
+                self.tray.setIcon(icon)
                 self.tray.setToolTip("DeadHop")
                 self.tray.setVisible(True)
         except Exception:
@@ -2706,12 +2975,33 @@ class MainWindow(QMainWindow):
                 pt = 12
         except Exception:
             pt = 12
-        # Load current autoconnect flag
+        # Load current autoconnect flag and notification settings
         auto = False
+        notify_toast = True
+        notify_tray = True
+        notify_sound = True
+        presence_sound_enabled = False
+        sound_msg_path = None
+        sound_hl_path = None
+        sound_presence_path = None
+        sound_volume = 0.7
         try:
             s = QSettings("DeadHop", "DeadHopClient")
             # Default to autoconnect enabled
             auto = s.value("server/autoconnect", True, type=bool)
+            notify_toast = bool(s.value("notify/toast", getattr(self, "_notify_toast", True)))
+            notify_tray = bool(s.value("notify/tray", getattr(self, "_notify_tray", True)))
+            notify_sound = bool(s.value("notify/sound", getattr(self, "_notify_sound", True)))
+            presence_sound_enabled = bool(
+                s.value("notify/presence_sound", getattr(self, "_notify_presence_sound", False))
+            )
+            sound_msg_path = s.value("notify/sound_msg", "", type=str) or None
+            sound_hl_path = s.value("notify/sound_hl", "", type=str) or None
+            sound_presence_path = s.value("notify/sound_presence", "", type=str) or None
+            try:
+                sound_volume = float(s.value("notify/sound_volume", 0.7))
+            except Exception:
+                sound_volume = 0.7
         except Exception:
             pass
         dlg = SettingsDialog(
@@ -2732,6 +3022,15 @@ class MainWindow(QMainWindow):
             auto_negotiate=bool(getattr(self, "_auto_negotiate", True)),
             prefer_tls=bool(getattr(self, "_prefer_tls", True)),
             try_starttls=bool(getattr(self, "_try_starttls", False)),
+            # Sounds tab
+            notify_toast=bool(notify_toast),
+            notify_tray=bool(notify_tray),
+            notify_sound=bool(notify_sound),
+            presence_sound_enabled=bool(presence_sound_enabled),
+            sound_msg_path=sound_msg_path,
+            sound_hl_path=sound_hl_path,
+            sound_presence_path=sound_presence_path,
+            sound_volume=float(sound_volume),
         )
         if dlg.exec() == dlg.DialogCode.Accepted:
             # Theme
@@ -3313,22 +3612,9 @@ class MainWindow(QMainWindow):
                         )
                     except Exception:
                         pass
-                # tray notification
+                # Centralized notifications
                 try:
-                    if self.tray is not None:
-                        self.tray.showMessage(
-                            f"Highlight in {target}",
-                            f"{nick}: {text}",
-                            QSystemTrayIcon.MessageIcon.Information,
-                            5000,
-                        )
-                except Exception:
-                    pass
-                # sound
-                try:
-                    if self._sound_enabled and self._sound is not None:
-                        # Use system beep if no source set
-                        self._sound.play()
+                    self._notify_event(f"Highlight in {target}", f"{nick}: {text}", True)
                 except Exception:
                     pass
                 # update sidebar labels

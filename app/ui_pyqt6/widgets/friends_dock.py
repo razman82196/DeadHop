@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -10,6 +11,8 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QPushButton,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -35,9 +38,50 @@ class FriendsDock(QWidget):
         v.addWidget(title)
 
         self.list = QListWidget(self)
+
+        # Add subtle text shadow to improve readability on themed backgrounds
+        class _ShadowDelegate(QStyledItemDelegate):
+            def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:  # type: ignore[override]
+                super().paint(painter, option, index)
+                txt = index.data()
+                if not txt:
+                    return
+                painter.save()
+                painter.setPen(QColor(0, 0, 0, 110))
+                painter.drawText(
+                    option.rect.adjusted(1, 1, 1, 1),
+                    int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                    str(txt),
+                )
+                painter.setPen(QColor(230, 230, 235))
+                painter.drawText(
+                    option.rect,
+                    int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                    str(txt),
+                )
+                painter.restore()
+
+        try:
+            self.list.setItemDelegate(_ShadowDelegate(self.list))
+        except Exception:
+            pass
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._open_menu)
         v.addWidget(self.list, 1)
+        # Theming
+        try:
+            self.setStyleSheet(
+                """
+                QWidget { background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                           stop:0 #0f1116, stop:0.5 #121527, stop:1 #0f1220); }
+                QListWidget { border: none; padding: 6px; }
+                QListWidget::item { padding: 6px 8px; border-radius: 6px; }
+                QListWidget::item:selected { background: rgba(130, 177, 255, 0.18); }
+                QLabel { font-weight: 700; color: #e6e6e6; padding: 6px 6px 2px 6px; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+                """
+            )
+        except Exception:
+            pass
 
         # Controls: add/remove
         h = QHBoxLayout()
