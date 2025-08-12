@@ -43,5 +43,6 @@ class DeadHopAI:
         except Exception as e:
             return f"[DeadHopAI] Error calling local LLM: {e}"
 
+
 # Backwards-compat alias
 PeachAI = DeadHopAI

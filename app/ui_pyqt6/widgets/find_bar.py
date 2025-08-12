@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
+
 
 class FindBar(QWidget):
     searchRequested = pyqtSignal(str, bool)  # (pattern, forward)
@@ -8,7 +10,7 @@ class FindBar(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         h = QHBoxLayout(self)
-        h.setContentsMargins(6,6,6,6)
+        h.setContentsMargins(6, 6, 6, 6)
         h.setSpacing(6)
         h.addWidget(QLabel("Find:"))
         self.edit = QLineEdit(self)

@@ -4,7 +4,6 @@ import argparse
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
 
 WELCOME = [
     ":tiny.server 001 {nick} :Welcome to TinyIRCD",
@@ -14,14 +13,15 @@ WELCOME = [
     ":tiny.server 376 {nick} :End of /MOTD command.",
 ]
 
+
 @dataclass
 class ScriptEvent:
     delay_ms: int
     line: str
 
 
-def load_script(path: Path) -> List[ScriptEvent]:
-    events: List[ScriptEvent] = []
+def load_script(path: Path) -> list[ScriptEvent]:
+    events: list[ScriptEvent] = []
     for ln in path.read_text(encoding="utf-8").splitlines():
         ln = ln.strip()
         if not ln or ln.startswith("#"):
@@ -36,7 +36,7 @@ def load_script(path: Path) -> List[ScriptEvent]:
 
 
 class TinyIRCD(asyncio.Protocol):
-    def __init__(self, script: List[ScriptEvent]):
+    def __init__(self, script: list[ScriptEvent]):
         self.script = script
         self.transport: asyncio.Transport | None = None
         self.nick = "guest"
@@ -58,8 +58,8 @@ class TinyIRCD(asyncio.Protocol):
             return
         if line.upper().startswith("USER "):
             # Send welcome
-            for l in WELCOME:
-                self.send(l.format(nick=self.nick))
+            for line_tmpl in WELCOME:
+                self.send(line_tmpl.format(nick=self.nick))
             return
         if line.upper().startswith("JOIN "):
             try:
@@ -103,7 +103,9 @@ async def main_async(port: int, script_path: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6667)
-    parser.add_argument("--script", type=Path, default=Path("app/tests/fixtures/tiny_scenario.script"))
+    parser.add_argument(
+        "--script", type=Path, default=Path("app/tests/fixtures/tiny_scenario.script")
+    )
     args = parser.parse_args()
     return asyncio.run(main_async(args.port, args.script))
 

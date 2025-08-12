@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
-import os
+from typing import TYPE_CHECKING
 
 # Set WebEngine-friendly environment before any Qt import
-os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --no-sandbox --disable-software-rasterizer")
+os.environ.setdefault(
+    "QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --no-sandbox --disable-software-rasterizer"
+)
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 os.environ.setdefault("QT_OPENGL", "software")
 
-from PyQt6.QtCore import QTimer, Qt, QCoreApplication
+from PyQt6.QtCore import QCoreApplication, Qt, QTimer
 from PyQt6.QtWidgets import QApplication
+
+if TYPE_CHECKING:
+    from app.ui_pyqt6.main_window import MainWindow
 
 # Ensure attributes are set before any QApplication
 try:
@@ -33,10 +38,10 @@ class ReplayDriver:
     - JOIN/PART/MODE basic notices
     """
 
-    def __init__(self, win: MainWindow, lines: List[str]) -> None:
+    def __init__(self, win: MainWindow, lines: list[str]) -> None:
         self.win = win
         self.lines = [ln.rstrip("\n") for ln in lines if ln.strip()]
-        self._names: Dict[str, List[str]] = {}
+        self._names: dict[str, list[str]] = {}
 
     def _flush_names(self, ch: str) -> None:
         names = self._names.pop(ch, None)
@@ -89,7 +94,7 @@ class ReplayDriver:
                         # Render actions simply as italic line
                         self.win._chat_append(f"<i>{body}</i>")
                     else:
-                        nick = prefix.split('!')[0][1:]
+                        nick = prefix.split("!")[0][1:]
                         try:
                             html = self.win._format_message_html(nick, body)
                             self.win._chat_append(html)
@@ -115,7 +120,9 @@ class ReplayDriver:
                     pass
                 return
             # Generic status for anything else (001..005 etc.)
-            if any(f" {n} " in msg for n in ("001","002","003","004","005","372","375","376")):
+            if any(
+                f" {n} " in msg for n in ("001", "002", "003", "004", "005", "372", "375", "376")
+            ):
                 try:
                     self.win._on_status(msg)
                 except Exception:
@@ -144,6 +151,7 @@ def main() -> int:
     # Initialize WebEngine profile before importing MainWindow to avoid init errors
     try:
         from PyQt6.QtWebEngineCore import QWebEngineProfile  # type: ignore
+
         _ = QWebEngineProfile.defaultProfile()
     except Exception:
         pass

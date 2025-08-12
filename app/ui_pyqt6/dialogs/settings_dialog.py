@@ -1,30 +1,39 @@
 from __future__ import annotations
-from typing import Optional
 
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QComboBox, QSlider, QCheckBox, QDialogButtonBox, QFontDialog
-)
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFontDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+)
 
 
 class SettingsDialog(QDialog):
-    def __init__(self,
-                 parent=None,
-                 theme_options: list[str] | None = None,
-                 current_theme: Optional[str] = None,
-                 opacity: float = 1.0,
-                 font_family: Optional[str] = None,
-                 font_point_size: Optional[int] = None,
-                 highlight_words: list[str] | None = None,
-                 friends: list[str] | None = None,
-                 word_wrap: bool = True,
-                 show_timestamps: bool = False,
-                 autoconnect: bool = False,
-                 auto_negotiate: bool = True,
-                 prefer_tls: bool = True,
-                 try_starttls: bool = False,
-                 ) -> None:
+    def __init__(
+        self,
+        parent=None,
+        theme_options: list[str] | None = None,
+        current_theme: str | None = None,
+        opacity: float = 1.0,
+        font_family: str | None = None,
+        font_point_size: int | None = None,
+        highlight_words: list[str] | None = None,
+        friends: list[str] | None = None,
+        word_wrap: bool = True,
+        show_timestamps: bool = False,
+        autoconnect: bool = False,
+        auto_negotiate: bool = True,
+        prefer_tls: bool = True,
+        try_starttls: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         v = QVBoxLayout(self)
@@ -110,7 +119,9 @@ class SettingsDialog(QDialog):
         v.addWidget(self.chk_try_starttls)
 
         # Buttons
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
+        )
         v.addWidget(btns)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
@@ -127,20 +138,20 @@ class SettingsDialog(QDialog):
             self.le_font.setText(f"{self._font_family}, {self._font_pt}pt")
 
     # Accessors
-    def selected_theme(self) -> Optional[str]:
+    def selected_theme(self) -> str | None:
         return self.cmb_theme.currentText() or None
 
     def selected_opacity(self) -> float:
         return float(self.sld_opacity.value()) / 100.0
 
-    def selected_font(self) -> tuple[Optional[str], Optional[int]]:
+    def selected_font(self) -> tuple[str | None, int | None]:
         return self._font_family, (self._font_pt or None)
 
     def selected_highlight_words(self) -> list[str]:
-        return [w.strip() for w in self.le_highlight.text().split(',') if w.strip()]
+        return [w.strip() for w in self.le_highlight.text().split(",") if w.strip()]
 
     def selected_friends(self) -> list[str]:
-        return [w.strip() for w in self.le_friends.text().split(',') if w.strip()]
+        return [w.strip() for w in self.le_friends.text().split(",") if w.strip()]
 
     def selected_word_wrap(self) -> bool:
         return self.chk_wrap.isChecked()

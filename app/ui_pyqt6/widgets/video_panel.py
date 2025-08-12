@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
-from typing import Optional
+from PyQt6.QtCore import QUrl
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 class VideoPanel(QWidget):
     """Inline, resizable video player for YouTube embeds."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("VideoPanel")
         v = QVBoxLayout(self)
@@ -29,19 +28,20 @@ class VideoPanel(QWidget):
         v.addWidget(header, 0)
 
         # Lazy import to ensure QApplication and WebEngine are initialized
-        from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore
         from PyQt6.QtWebEngineCore import QWebEnginePage  # type: ignore
+        from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore
+
         class _VidPage(QWebEnginePage):
             def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
                 try:
                     m = str(message)
                     src = str(sourceID)
                     noisy = (
-                        'requestStorageAccessFor',
-                        'generate_204',
-                        'googleads.g.doubleclick.net',
-                        'CORS policy',
-                        'ResizeObserver loop completed',
+                        "requestStorageAccessFor",
+                        "generate_204",
+                        "googleads.g.doubleclick.net",
+                        "CORS policy",
+                        "ResizeObserver loop completed",
                     )
                     if any(s in m or s in src for s in noisy):
                         return
@@ -51,6 +51,7 @@ class VideoPanel(QWidget):
                     super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
                 except Exception:
                     pass
+
         self.view = QWebEngineView(self)
         try:
             self.view.setPage(_VidPage(self))

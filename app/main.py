@@ -4,14 +4,14 @@ from pathlib import Path
 import json
 import os
 import shutil
-from typing import Any, Dict
+from typing import Any
 
 # Paths are module-level so tests can monkeypatch them easily.
 DATA_DIR: Path = Path.home() / ".deadhop_local"
 CONFIG_PATH: Path = DATA_DIR / "config.json"
 
 
-def _default_config() -> Dict[str, Any]:
+def _default_config() -> dict[str, Any]:
     return {
         "ui": {
             "theme": "dark",
@@ -27,7 +27,7 @@ def _default_config() -> Dict[str, Any]:
     }
 
 
-def ensure_config() -> Dict[str, Any]:
+def ensure_config() -> dict[str, Any]:
     """Ensure the user config exists and return it as a dict.
 
     Tests may monkeypatch DATA_DIR and CONFIG_PATH before calling this.
@@ -48,7 +48,7 @@ def ensure_config() -> Dict[str, Any]:
         return cfg
 
 
-def _persist_cfg(cfg: Dict[str, Any]) -> None:
+def _persist_cfg(cfg: dict[str, Any]) -> None:
     """Write the config dict to CONFIG_PATH (pretty JSON)."""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CONFIG_PATH.open("w", encoding="utf-8") as f:

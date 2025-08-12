@@ -1,8 +1,10 @@
 from __future__ import annotations
-import sys
-import os
-from pathlib import Path
+
 import asyncio
+import os
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Configure Qt WebEngine and OpenGL for GPU acceleration BEFORE any Qt import/app creation.
 # On Windows, prefer ANGLE (D3D11) and enable Chromium GPU path.
@@ -14,22 +16,11 @@ enable = "--enable-gpu --ignore-gpu-blocklist --enable-zero-copy --use-angle=d3d
 flags = (kept + " " + enable).strip()
 for extra in ["--log-level=3", "--disable-logging"]:
     if extra not in flags:
-        flags += (" " + extra)
+        flags += " " + extra
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = flags
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 # Prefer ANGLE/D3D11 for Qt Quick/scene graph (Qt6 RHI); safe no-op on non-Windows.
 os.environ.setdefault("QSG_RHI_BACKEND", "d3d11")
-
-from PyQt6.QtCore import Qt, QCoreApplication
-# Ensure attributes are set before creating QApplication
-try:
-    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-except Exception:
-    pass
-
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon
-from qasync import QEventLoop
 
 APP_NAME = "DeadHop"
 
@@ -38,11 +29,18 @@ _ICONS_DIR = Path(__file__).resolve().parent / "resources" / "icons"
 _CUSTOM_ICONS_DIR = _ICONS_DIR / "custom"
 _FALLBACK_ICON = _ICONS_DIR / "deadhop.svg"
 
+if TYPE_CHECKING:  # for type hints without importing Qt at runtime
+    from PyQt6.QtGui import QIcon
+
+
 def app_icon() -> QIcon:
     """Return the best available application icon.
 
     Prefers custom icons placed under `app/resources/icons/custom/`.
     """
+    # Import lazily to avoid E402 and heavy module init during module import
+    from PyQt6.QtGui import QIcon
+
     # Prefer a connect/plug icon for taskbar if available
     candidates = [
         # Connect-focused
@@ -71,6 +69,17 @@ def app_icon() -> QIcon:
 
 
 def main() -> int:
+    # Import Qt modules only when running the app to satisfy E402
+    from PyQt6.QtCore import QCoreApplication, Qt
+    from PyQt6.QtWidgets import QApplication
+    from qasync import QEventLoop
+
+    # Ensure attributes are set before creating QApplication
+    try:
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
+    except Exception:
+        pass
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
     app = QApplication(sys.argv)
@@ -80,6 +89,7 @@ def main() -> int:
     # Ensure Qt WebEngine is initialized after QApplication
     try:
         from PyQt6.QtWebEngineCore import QWebEngineProfile  # type: ignore
+
         _ = QWebEngineProfile.defaultProfile()
     except Exception:
         pass
@@ -87,6 +97,7 @@ def main() -> int:
     # Theme via qt-material if present
     try:
         from qt_material import apply_stylesheet, list_themes
+
         themes = list_themes()
         # Prefer a dark theme if available
         preferred = "dark_teal.xml"
@@ -104,6 +115,7 @@ def main() -> int:
         try:
             import sys as _sys
             from pathlib import Path as _Path
+
             root = _Path(__file__).resolve().parent.parent
             if str(root) not in _sys.path:
                 _sys.path.append(str(root))

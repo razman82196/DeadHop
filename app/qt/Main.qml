@@ -113,7 +113,7 @@ ApplicationWindow {
                     }
                 }
             }
-        
+
 
     // Settings dialog
     Dialog {
@@ -277,7 +277,7 @@ ApplicationWindow {
                     }
                 }
             }
-        
+
     GroupBox {
                 title: "Profiles"
                 Layout.fillWidth: true

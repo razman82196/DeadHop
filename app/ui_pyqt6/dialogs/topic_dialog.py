@@ -1,5 +1,7 @@
 from __future__ import annotations
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLineEdit, QLabel, QDialogButtonBox
+
+from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QLineEdit, QVBoxLayout
+
 
 class TopicDialog(QDialog):
     def __init__(self, channel: str, current_topic: str | None = None, parent=None) -> None:
@@ -12,7 +14,9 @@ class TopicDialog(QDialog):
         if current_topic:
             self.edit.setText(current_topic)
         v.addWidget(self.edit)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, parent=self)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, parent=self
+        )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         v.addWidget(btns)

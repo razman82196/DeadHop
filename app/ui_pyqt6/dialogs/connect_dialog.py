@@ -1,8 +1,17 @@
 from __future__ import annotations
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QLineEdit, QDialogButtonBox, QCheckBox, QHBoxLayout
-)
+
 import random
+
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QVBoxLayout,
+)
+
 
 class ConnectDialog(QDialog):
     def __init__(self, parent=None):
@@ -41,7 +50,9 @@ class ConnectDialog(QDialog):
         form.addRow("", self.remember)
         form.addRow("", self.autoconnect)
         v.addLayout(form)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         v.addWidget(btns)
@@ -62,7 +73,19 @@ class ConnectDialog(QDialog):
         sasl_user = self.sasl_user.text().strip() or None
         remember = self.remember.isChecked()
         autoconnect = self.autoconnect.isChecked()
-        return host, port, tls, nick, user, realname, chans, password, sasl_user, remember, autoconnect
+        return (
+            host,
+            port,
+            tls,
+            nick,
+            user,
+            realname,
+            chans,
+            password,
+            sasl_user,
+            remember,
+            autoconnect,
+        )
 
     def _rand_nick(self) -> str:
         try:

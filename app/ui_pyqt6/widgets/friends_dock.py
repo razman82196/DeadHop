@@ -1,10 +1,21 @@
 from __future__ import annotations
-from PyQt6.QtCore import pyqtSignal, Qt, QPoint
+
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLineEdit, QLabel, QMenu, QFileDialog
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
+
 from .avatars import make_avatar_icon
+
 
 class FriendsDock(QWidget):
     friendsChanged = pyqtSignal(list)  # emits full list
@@ -48,7 +59,9 @@ class FriendsDock(QWidget):
         self._refresh()
         self.friendsChanged.emit(sorted(self._all_friends))
 
-    def online_update(self, online_add: list[str] | None = None, online_remove: list[str] | None = None) -> None:
+    def online_update(
+        self, online_add: list[str] | None = None, online_remove: list[str] | None = None
+    ) -> None:
         if online_add:
             self._online.update(online_add)
         if online_remove:
@@ -107,7 +120,9 @@ class FriendsDock(QWidget):
         act_clear = m.addAction("Clear Avatar")
         act = m.exec(self.list.mapToGlobal(pos))
         if act == act_set:
-            fn, _ = QFileDialog.getOpenFileName(self, "Choose Avatar", filter="Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+            fn, _ = QFileDialog.getOpenFileName(
+                self, "Choose Avatar", filter="Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+            )
             if fn:
                 self._avatars[nick] = fn
                 self._refresh()

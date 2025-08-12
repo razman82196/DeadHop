@@ -7,7 +7,7 @@ from app.irc.manager import IRCManager, ServerProfile
 
 @pytest.fixture
 def profile() -> ServerProfile:
-    return ServerProfile(name="local", host="example.org", channels=["#test"]) 
+    return ServerProfile(name="local", host="example.org", channels=["#test"])
 
 
 @pytest.mark.asyncio

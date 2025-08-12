@@ -48,7 +48,9 @@ class IRCManager:
             None  # (channel, [(add, mode_char, nick)])
         )
         # Channel mode changes (raw string with args) and topic changes
-        self.on_mode_channel: Optional[Callable[[str, str, str], None]] = None  # (channel, actor, modes_with_args)
+        self.on_mode_channel: Optional[Callable[[str, str, str], None]] = (
+            None  # (channel, actor, modes_with_args)
+        )
         self.on_topic: Optional[Callable[[str, str, str], None]] = None  # (channel, actor, topic)
         self.on_away: Optional[Callable[[str, Optional[str]], None]] = (
             None  # (nick, away_msg or None)

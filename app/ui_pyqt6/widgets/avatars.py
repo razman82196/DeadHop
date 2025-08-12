@@ -1,6 +1,7 @@
 from __future__ import annotations
-from PyQt6.QtCore import Qt, QRect, QSize, QPoint
-from PyQt6.QtGui import QPixmap, QPainter, QColor, QPainterPath, QIcon, QFont
+
+from PyQt6.QtCore import QRect, Qt
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
 
 
 def _letter_pixmap(letter: str, size: int, bg: QColor) -> QPixmap:
@@ -19,24 +20,25 @@ def _letter_pixmap(letter: str, size: int, bg: QColor) -> QPixmap:
     p.setFont(f)
     p.setPen(Qt.GlobalColor.white)
     rect = QRect(0, 0, size, size)
-    p.drawText(rect, Qt.AlignmentFlag.AlignCenter, (letter or '?').upper())
+    p.drawText(rect, Qt.AlignmentFlag.AlignCenter, (letter or "?").upper())
     p.end()
     return pm
 
 
 def _nick_seed_color(nick: str) -> QColor:
     try:
-        s = (nick or '').lower().encode('utf-8')
+        s = (nick or "").lower().encode("utf-8")
         h = 0
         for b in s:
             h = (h * 131 + int(b)) & 0xFFFFFFFF
         hue = h % 360
         # pleasant saturation/lightness
         import colorsys
-        r, g, b = colorsys.hls_to_rgb(hue/360.0, 0.58, 0.65)
-        return QColor(int(r*255), int(g*255), int(b*255))
+
+        r, g, b = colorsys.hls_to_rgb(hue / 360.0, 0.58, 0.65)
+        return QColor(int(r * 255), int(g * 255), int(b * 255))
     except Exception:
-        return QColor('#7c7cff')
+        return QColor("#7c7cff")
 
 
 def _rounded(pix: QPixmap, size: int) -> QPixmap:
@@ -44,7 +46,12 @@ def _rounded(pix: QPixmap, size: int) -> QPixmap:
         out = QPixmap(size, size)
         out.fill(Qt.GlobalColor.transparent)
         return out
-    scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+    scaled = pix.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
     out = QPixmap(size, size)
     out.fill(Qt.GlobalColor.transparent)
     p = QPainter(out)
@@ -60,23 +67,29 @@ def _rounded(pix: QPixmap, size: int) -> QPixmap:
     return out
 
 
-def make_avatar_icon(nick: str, avatar_path: str | None, size: int = 24, online: bool = False, status: str | None = None) -> QIcon:
+def make_avatar_icon(
+    nick: str,
+    avatar_path: str | None,
+    size: int = 24,
+    online: bool = False,
+    status: str | None = None,
+) -> QIcon:
     # base avatar
     base_pm: QPixmap
     if avatar_path:
         pm = QPixmap(avatar_path)
         if pm.isNull():
-            base_pm = _letter_pixmap(nick[:1] if nick else '?', size, _nick_seed_color(nick))
+            base_pm = _letter_pixmap(nick[:1] if nick else "?", size, _nick_seed_color(nick))
         else:
             base_pm = _rounded(pm, size)
     else:
-        base_pm = _letter_pixmap(nick[:1] if nick else '?', size, _nick_seed_color(nick))
+        base_pm = _letter_pixmap(nick[:1] if nick else "?", size, _nick_seed_color(nick))
     # overlay presence dot
     dot_d = max(6, int(size * 0.28))
     dot_pm = QPixmap(base_pm)
     p = QPainter(dot_pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    color = QColor('#22cc66') if online else QColor('#9aa0a6')
+    color = QColor("#22cc66") if online else QColor("#9aa0a6")
     p.setBrush(color)
     p.setPen(Qt.PenStyle.NoPen)
     # place at bottom-right with small margin
@@ -88,11 +101,11 @@ def make_avatar_icon(nick: str, avatar_path: str | None, size: int = 24, online:
     if status:
         s = status.strip()[:1]
         badge_map = {
-            '~': QColor('#b388ff'),  # founder - violet
-            '&': QColor('#ff79c6'),  # admin - pink
-            '@': QColor('#ffb74d'),  # op - orange
-            '%': QColor('#26c6da'),  # halfop - cyan
-            '+': QColor('#64b5f6'),  # voice - blue
+            "~": QColor("#b388ff"),  # founder - violet
+            "&": QColor("#ff79c6"),  # admin - pink
+            "@": QColor("#ffb74d"),  # op - orange
+            "%": QColor("#26c6da"),  # halfop - cyan
+            "+": QColor("#64b5f6"),  # voice - blue
         }
         bc = badge_map.get(s)
         if bc is not None:

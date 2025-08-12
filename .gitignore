@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -19,7 +19,6 @@ app/resources/qtweb/browser/
 # Builds & dist
 build/
 dist/
-*.spec
 *.toc
 
 # Logs

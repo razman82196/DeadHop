@@ -1,6 +1,7 @@
 from __future__ import annotations
-from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect, Qt, QTimer
-from PyQt6.QtWidgets import QWidget, QLabel
+
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt, QTimer
+from PyQt6.QtWidgets import QLabel, QWidget
 
 
 class Toast(QWidget):

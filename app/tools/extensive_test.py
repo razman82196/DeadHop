@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import sys
-import time
-from typing import List
 
-from PyQt6.QtCore import QTimer, QUrl, Qt
+from PyQt6.QtCore import QTimer, QUrl
 from PyQt6.QtWidgets import QApplication
 
 # Ensure app can import package
@@ -27,7 +25,7 @@ class TestRunner:
         self.app = app
         self.win = MainWindow()
         self.win.show()
-        self.results: List[str] = []
+        self.results: list[str] = []
 
     def log(self, msg: str) -> None:
         print(msg)
@@ -84,8 +82,12 @@ class TestRunner:
         # Route YouTube to inline video panel
         try:
             self.win._on_anchor_clicked(QUrl(yt))
-            visible = getattr(self.win.video_panel, 'isVisible', lambda: False)()
-            self.log("[OK] YouTube routed to inline player" if visible else "[WARN] Video panel not visible after YouTube click")
+            visible = getattr(self.win.video_panel, "isVisible", lambda: False)()
+            self.log(
+                "[OK] YouTube routed to inline player"
+                if visible
+                else "[WARN] Video panel not visible after YouTube click"
+            )
         except Exception as e:
             self.log(f"[ERR] YouTube routing failed: {e}")
 
@@ -102,7 +104,11 @@ class TestRunner:
             if hasattr(self.win.composer, "_handle_tab"):
                 self.win.composer._handle_tab(True)
                 handled = True
-            self.log("[OK] Tab completion invoked" if handled else "[WARN] Tab completion method not available")
+            self.log(
+                "[OK] Tab completion invoked"
+                if handled
+                else "[WARN] Tab completion method not available"
+            )
         except Exception as e:
             self.log(f"[ERR] Tab completion failed: {e}")
 
@@ -113,7 +119,11 @@ class TestRunner:
             if hasattr(self.win.composer, "_handle_tab"):
                 self.win.composer._handle_tab(False)
                 handled = True
-            self.log("[OK] Reverse tab completion invoked" if handled else "[WARN] Reverse completion not available")
+            self.log(
+                "[OK] Reverse tab completion invoked"
+                if handled
+                else "[WARN] Reverse completion not available"
+            )
         except Exception as e:
             self.log(f"[ERR] Reverse tab completion failed: {e}")
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import Optional
+
 from PyQt6.QtCore import QObject, pyqtSignal
+
 from ..ai.ollama import stream_generate
 
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
-from PyQt6.QtCore import pyqtSignal, Qt
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QTextEdit, QPushButton
-from PyQt6.QtCore import QSize
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QTextEdit, QWidget
+
 try:
     from rapidfuzz import process as rf_process
 except Exception:  # optional dependency
@@ -109,13 +110,19 @@ class Composer(QWidget):
             self._cycle_anchor = (start, end)
             # Candidates: names starting with word (case-insens.)
             low = word.lower()
-            cands = [n for n in self._completion_names if n.lower().startswith(low)] if low else list(self._completion_names)
+            cands = (
+                [n for n in self._completion_names if n.lower().startswith(low)]
+                if low
+                else list(self._completion_names)
+            )
             # If none, try fuzzy with rapidfuzz (top 10 by score)
             if not cands and rf_process and low:
                 try:
                     scored = rf_process.extract(low, self._completion_names, limit=10)
                     # scored: list of tuples (match, score, idx)
-                    cands = [m for (m, _score, _idx) in sorted(scored, key=lambda t: t[1], reverse=True)]
+                    cands = [
+                        m for (m, _score, _idx) in sorted(scored, key=lambda t: t[1], reverse=True)
+                    ]
                 except Exception:
                     pass
             # If at line start, prefer appending ':' after nick

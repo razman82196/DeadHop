@@ -1,54 +1,68 @@
 from __future__ import annotations
+
+import asyncio
+import json
 import re
 import shutil
-from typing import Optional
+import time
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeySequence, QTextCursor, QCursor, QFont, QIcon, QTextDocument, QPalette
-from PyQt6.QtWidgets import (
-    QApplication, QWidget, QMainWindow, QDockWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLineEdit, QPushButton, QListWidget, QListWidgetItem, QLabel,
-    QFileDialog, QMessageBox, QInputDialog, QToolBar, QMenuBar,
-    QMenu, QDialog, QDialogButtonBox, QCheckBox, QSplitter, QStatusBar,
-    QListWidget, QPushButton, QSystemTrayIcon,
+from PyQt6.QtCore import QByteArray, QSettings, QSize, Qt, QThread, QUrl
+from PyQt6.QtGui import (
+    QAction,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QPalette,
 )
-from PyQt6.QtGui import QDesktopServices, QAction
-from PyQt6.QtCore import QUrl
-import asyncio
-import re
-import time
-import json
-from PyQt6.QtCore import QSettings, QByteArray, QSize, QUrl
-import asyncio
-import re
-import time
-from PyQt6.QtCore import QThread
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDockWidget,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QStatusBar,
+    QSystemTrayIcon,
+    QTextEdit,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..ai.ollama import is_server_up
+from .ai_worker import OllamaStreamWorker
+from .bridge import BridgeQt
+from .dialogs.connect_dialog import ConnectDialog
+from .dialogs.modes_dialog import ModesDialog
+from .dialogs.topic_dialog import TopicDialog
 from .widgets.composer import Composer
-from .widgets.members_view import MembersView
-from .widgets.toast import ToastHost
-from .widgets.sidebar_tree import SidebarTree
-from .widgets.url_grabber import URLGrabber
 from .widgets.find_bar import FindBar
 from .widgets.friends_dock import FriendsDock
+from .widgets.members_view import MembersView
+from .widgets.sidebar_tree import SidebarTree
+from .widgets.toast import ToastHost
+from .widgets.url_grabber import URLGrabber
 from .widgets.video_panel import VideoPanel
-from .bridge import BridgeQt
-from .ai_worker import OllamaStreamWorker
-from ..ai.ollama import is_server_up
-from PyQt6.QtCore import QThread
-from .dialogs.connect_dialog import ConnectDialog
-from .dialogs.topic_dialog import TopicDialog
-from .dialogs.modes_dialog import ModesDialog
+
 try:
     from .theme import theme_manager as _theme_manager
 except Exception:
     _theme_manager = None
-from ..logging.log_writer import LogWriter
 from pathlib import Path
+
+from ..logging.log_writer import LogWriter
 
 # --- Icon utilities ---
 # Prefer filesystem icons placed under `app/resources/icons/custom/`.
 _ICONS_DIR = Path(__file__).resolve().parents[1] / "resources" / "icons"
 _CUSTOM_ICONS_DIR = _ICONS_DIR / "custom"
+
 
 def _icon_from_fs(name: str) -> QIcon:
     """Try to load an icon by base name from the custom icons folder.
@@ -136,9 +150,13 @@ def _icon_from_fs(name: str) -> QIcon:
                         self.toast_host.show_toast(msg)
                     except Exception:
                         pass
-                    if getattr(self, "_notify_presence_system", True) and getattr(self, "tray", None):
+                    if getattr(self, "_notify_presence_system", True) and getattr(
+                        self, "tray", None
+                    ):
                         try:
-                            self.tray.showMessage("Friend online", msg, QSystemTrayIcon.MessageIcon.Information, 2500)
+                            self.tray.showMessage(
+                                "Friend online", msg, QSystemTrayIcon.MessageIcon.Information, 2500
+                            )
                         except Exception:
                             pass
                     if getattr(self, "_notify_presence_sound", False):
@@ -172,14 +190,20 @@ def _icon_from_fs(name: str) -> QIcon:
                         self.toast_host.show_toast(msg)
                     except Exception:
                         pass
-                    if getattr(self, "_notify_presence_system", True) and getattr(self, "tray", None):
+                    if getattr(self, "_notify_presence_system", True) and getattr(
+                        self, "tray", None
+                    ):
                         try:
-                            self.tray.showMessage("Friend offline", msg, QSystemTrayIcon.MessageIcon.Warning, 2500)
+                            self.tray.showMessage(
+                                "Friend offline", msg, QSystemTrayIcon.MessageIcon.Warning, 2500
+                            )
                         except Exception:
                             pass
         except Exception:
             pass
+
     return QIcon()
+
 
 def get_icon(names: list[str] | tuple[str, ...], awesome_fallback: str | None = None) -> QIcon:
     """Resolve an icon preferring theme (qtawesome), then filesystem as fallback.
@@ -191,6 +215,7 @@ def get_icon(names: list[str] | tuple[str, ...], awesome_fallback: str | None = 
     if awesome_fallback:
         try:
             import qtawesome as qta
+
             ic = qta.icon(awesome_fallback)
             if ic and not ic.isNull():
                 return ic
@@ -219,6 +244,7 @@ class MainWindow(QMainWindow):
         # Filesystem location for persisted scrollback
         try:
             from PyQt6.QtCore import QStandardPaths
+
             base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         except Exception:
             base = None
@@ -229,16 +255,17 @@ class MainWindow(QMainWindow):
         self._notify_on_highlight = True
         self._notify_on_join_part = True
         # Settings defaults (defensive init so closeEvent/_save_settings never crash)
-        self._current_theme: Optional[str] = None
+        self._current_theme: str | None = None
         self._word_wrap: bool = True
         self._show_timestamps: bool = False
-        self._chat_font_family: Optional[str] = None
-        self._chat_font_size: Optional[int] = None
+        self._chat_font_family: str | None = None
+        self._chat_font_size: int | None = None
         self._highlight_keywords: list[str] = []
         # Apply default theme (prefer qt-material; fallback to legacy theme manager if present)
         try:
             from PyQt6.QtWidgets import QApplication
             from qt_material import apply_stylesheet, list_themes
+
             app = QApplication.instance()
             if app:
                 themes = list_themes()
@@ -261,8 +288,9 @@ class MainWindow(QMainWindow):
         self._sound_enabled: bool = True
         try:
             from PyQt6.QtMultimedia import QSoundEffect
+
             self._sound = QSoundEffect(self)
-            self._sound.setSource(QUrl.fromLocalFile("") )  # lazy set later or system sound
+            self._sound.setSource(QUrl.fromLocalFile(""))  # lazy set later or system sound
         except Exception:
             self._sound = None
 
@@ -287,6 +315,7 @@ class MainWindow(QMainWindow):
 
         # Chat view switched to QWebEngineView for rich HTML and inline media
         from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore
+
         self.chat = QWebEngineView(self)
         # Chat webview readiness and buffer for early messages
         self._chat_ready: bool = False
@@ -313,7 +342,7 @@ class MainWindow(QMainWindow):
             self.split_chat.setSizes([800, 0])
         except Exception:
             pass
-        
+
         # Composer
         self.composer = Composer()
         self.composer.messageSubmitted.connect(self._on_submit)
@@ -374,11 +403,12 @@ class MainWindow(QMainWindow):
 
         # Ensure tray icon has a visible icon to avoid warnings
         try:
-            if getattr(self, 'tray', None) is not None:
+            if getattr(self, "tray", None) is not None:
                 ic = self.windowIcon()
                 if ic.isNull():
                     try:
                         from PyQt6.QtWidgets import QStyle
+
                         ic = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
                     except Exception:
                         pass
@@ -425,7 +455,7 @@ class MainWindow(QMainWindow):
         try:
             self.friends.friendsChanged.connect(self._on_friends_changed)
             # Persist avatars and reflect to members view
-            if hasattr(self.friends, 'avatarsChanged'):
+            if hasattr(self.friends, "avatarsChanged"):
                 self.friends.avatarsChanged.connect(self._on_avatars_changed)
         except Exception:
             pass
@@ -439,7 +469,9 @@ class MainWindow(QMainWindow):
                 available = True
             if available:
                 self.tray = QSystemTrayIcon(self)
-                app_icon = get_icon(["app", "logo", "deadhop"]) if 'get_icon' in globals() else QIcon()
+                app_icon = (
+                    get_icon(["app", "logo", "deadhop"]) if "get_icon" in globals() else QIcon()
+                )
                 if not app_icon.isNull():
                     self.tray.setIcon(app_icon)
                 # Basic tray setup: tooltip and visibility
@@ -505,27 +537,27 @@ class MainWindow(QMainWindow):
         self.bridge.channelsUpdated.connect(self._on_channels_updated)
         # Typed event wiring (JOIN/PART/QUIT/NICK/TOPIC/MODE)
         try:
-            if hasattr(self.bridge, 'userJoined'):
+            if hasattr(self.bridge, "userJoined"):
                 self.bridge.userJoined.connect(self._on_user_joined)
-            if hasattr(self.bridge, 'userParted'):
+            if hasattr(self.bridge, "userParted"):
                 self.bridge.userParted.connect(self._on_user_parted)
-            if hasattr(self.bridge, 'userQuit'):
+            if hasattr(self.bridge, "userQuit"):
                 self.bridge.userQuit.connect(self._on_user_quit)
-            if hasattr(self.bridge, 'userNickChanged'):
+            if hasattr(self.bridge, "userNickChanged"):
                 self.bridge.userNickChanged.connect(self._on_user_nick_changed)
-            if hasattr(self.bridge, 'channelTopic'):
+            if hasattr(self.bridge, "channelTopic"):
                 self.bridge.channelTopic.connect(self._on_channel_topic)
-            if hasattr(self.bridge, 'channelMode'):
+            if hasattr(self.bridge, "channelMode"):
                 self.bridge.channelMode.connect(self._on_channel_mode)
-            if hasattr(self.bridge, 'channelModeUsers'):
+            if hasattr(self.bridge, "channelModeUsers"):
                 self.bridge.channelModeUsers.connect(self._on_channel_mode_users)
         except Exception:
             pass
         # Presence via MONITOR
         try:
-            if hasattr(self.bridge, 'monitorOnline'):
+            if hasattr(self.bridge, "monitorOnline"):
                 self.bridge.monitorOnline.connect(self._on_monitor_online)
-            if hasattr(self.bridge, 'monitorOffline'):
+            if hasattr(self.bridge, "monitorOffline"):
                 self.bridge.monitorOffline.connect(self._on_monitor_offline)
         except Exception:
             pass
@@ -551,7 +583,7 @@ class MainWindow(QMainWindow):
             self._apply_rounded_corners(8)
         except Exception:
             pass
-        # 
+        #
 
     def _maybe_migrate_qsettings(self) -> None:
         """Copy settings from legacy Peach/PeachClient to DeadHop/DeadHopClient once.
@@ -595,6 +627,7 @@ class MainWindow(QMainWindow):
 
     def _schedule_async(self, func, *args, **kwargs) -> None:
         """Schedule a callable; if it returns a coroutine, create a task."""
+
         def runner() -> None:
             try:
                 res = func(*args, **kwargs)
@@ -603,8 +636,10 @@ class MainWindow(QMainWindow):
                     asyncio.create_task(res)
             except Exception:
                 pass
+
         try:
             from PyQt6.QtCore import QTimer
+
             QTimer.singleShot(0, runner)
         except Exception:
             runner()
@@ -615,7 +650,7 @@ class MainWindow(QMainWindow):
     def _on_member_action(self, nick: str, action: str) -> None:
         # Sanitize nick from list labels that may include status prefix
         try:
-            nick = str(nick or "").lstrip('~&@%+ ').strip()
+            nick = str(nick or "").lstrip("~&@%+ ").strip()
         except Exception:
             pass
         action = action.lower()
@@ -652,10 +687,16 @@ class MainWindow(QMainWindow):
                 pass
         elif action == "kick":
             ch = self.bridge.current_channel() or ""
-            reason, ok = QInputDialog.getText(self, "Kick", f"Reason for kicking {nick} from {ch}:", text="")
+            reason, ok = QInputDialog.getText(
+                self, "Kick", f"Reason for kicking {nick} from {ch}:", text=""
+            )
             if ok:
                 sent = False
-                for meth, cmd in (("kickUser", None), ("sendRaw", f"KICK {ch} {nick} :{reason}"), ("sendCommand", f"KICK {ch} {nick} :{reason}")):
+                for meth, cmd in (
+                    ("kickUser", None),
+                    ("sendRaw", f"KICK {ch} {nick} :{reason}"),
+                    ("sendCommand", f"KICK {ch} {nick} :{reason}"),
+                ):
                     fn = getattr(self.bridge, meth, None)
                     if callable(fn):
                         try:
@@ -668,10 +709,16 @@ class MainWindow(QMainWindow):
                     self.toast_host.show_toast("Kick not implemented in bridge")
         elif action == "ban":
             ch = self.bridge.current_channel() or ""
-            mask, ok = QInputDialog.getText(self, "Ban", f"Ban mask or nick for {ch} (e.g. {nick} or *!*@host):", text=nick)
+            mask, ok = QInputDialog.getText(
+                self, "Ban", f"Ban mask or nick for {ch} (e.g. {nick} or *!*@host):", text=nick
+            )
             if ok and mask.strip():
                 sent = False
-                for meth, cmd in (("setModes", None), ("sendRaw", f"MODE {ch} +b {mask}"), ("sendCommand", f"MODE {ch} +b {mask}")):
+                for meth, cmd in (
+                    ("setModes", None),
+                    ("sendRaw", f"MODE {ch} +b {mask}"),
+                    ("sendCommand", f"MODE {ch} +b {mask}"),
+                ):
                     fn = getattr(self.bridge, meth, None)
                     if callable(fn):
                         try:
@@ -696,7 +743,10 @@ class MainWindow(QMainWindow):
                 self._send_raw(f"MODE {ch} -o {nick}")
         elif action == "add friend":
             try:
-                current = [self.friends.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.friends.list.count())]
+                current = [
+                    self.friends.list.item(i).data(Qt.ItemDataRole.UserRole)
+                    for i in range(self.friends.list.count())
+                ]
                 if nick not in current:
                     current.append(nick)
                     self.friends.set_friends(current)
@@ -757,16 +807,53 @@ class MainWindow(QMainWindow):
         try:
             # track last TLS choice
             self._last_connect_tls = bool(tls)
-            self._schedule_async(self.bridge.connectHost, host, port, tls, nick or self._default_nick(), user, realname, chans, password, sasl_user, bool(ignore))
+            self._schedule_async(
+                self.bridge.connectHost,
+                host,
+                port,
+                tls,
+                nick or self._default_nick(),
+                user,
+                realname,
+                chans,
+                password,
+                sasl_user,
+                bool(ignore),
+            )
             if getattr(self, "_auto_negotiate", True):
-                self._schedule_async(self._negotiate_on_connect, host, nick or self._default_nick(), user, password, sasl_user)
+                self._schedule_async(
+                    self._negotiate_on_connect,
+                    host,
+                    nick or self._default_nick(),
+                    user,
+                    password,
+                    sasl_user,
+                )
             self.status.showMessage(f"Connecting to {host}:{port}…", 2000)
             self._my_nick = nick or self._default_nick()
         except Exception:
             try:
-                self.bridge.connectHost(host, port, tls, nick or self._default_nick(), user, realname, chans, password, sasl_user, bool(ignore))
+                self.bridge.connectHost(
+                    host,
+                    port,
+                    tls,
+                    nick or self._default_nick(),
+                    user,
+                    realname,
+                    chans,
+                    password,
+                    sasl_user,
+                    bool(ignore),
+                )
                 if getattr(self, "_auto_negotiate", True):
-                    self._schedule_async(self._negotiate_on_connect, host, nick or self._default_nick(), user, password, sasl_user)
+                    self._schedule_async(
+                        self._negotiate_on_connect,
+                        host,
+                        nick or self._default_nick(),
+                        user,
+                        password,
+                        sasl_user,
+                    )
             except Exception:
                 pass
 
@@ -774,24 +861,70 @@ class MainWindow(QMainWindow):
         data = self._servers_load(name)
         if not data:
             return
-        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, ignore = data
+        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, ignore = (
+            data
+        )
         dlg = ConnectDialog(self)
         try:
-            dlg.set_values(host, port, tls, nick, user, realname, chans, password, sasl_user, True, autoconnect)
+            dlg.set_values(
+                host, port, tls, nick, user, realname, chans, password, sasl_user, True, autoconnect
+            )
         except Exception:
             pass
         if dlg.exec() == dlg.DialogCode.Accepted:
             vals = dlg.values()
-            host, port, tls, nick, user, realname, chans, password, sasl_user, remember, autoconnect = vals
-            self._servers_save(name, host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user, ignore)
+            (
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                chans,
+                password,
+                sasl_user,
+                remember,
+                autoconnect,
+            ) = vals
+            self._servers_save(
+                name,
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                chans,
+                bool(autoconnect),
+                password,
+                sasl_user,
+                ignore,
+            )
 
     def _servers_toggle_ignore_name(self, name: str) -> None:
         data = self._servers_load(name)
         if not data:
             return
-        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, ignore = data
-        self._servers_save(name, host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user, not ignore)
-        self.status.showMessage(f"Ignore invalid certs: {'Yes' if not ignore else 'No'} for {name}", 1500)
+        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, ignore = (
+            data
+        )
+        self._servers_save(
+            name,
+            host,
+            port,
+            tls,
+            nick,
+            user,
+            realname,
+            chans,
+            bool(autoconnect),
+            password,
+            sasl_user,
+            not ignore,
+        )
+        self.status.showMessage(
+            f"Ignore invalid certs: {'Yes' if not ignore else 'No'} for {name}", 1500
+        )
 
     def _show_browser_panel(self) -> None:
         self._ensure_browser_window()
@@ -830,6 +963,7 @@ class MainWindow(QMainWindow):
         if self.browser_window is None:
             try:
                 from .widgets.browser_window import BrowserWindow
+
                 self.browser_window = BrowserWindow(self)
             except Exception:
                 self.browser_window = None
@@ -867,7 +1001,9 @@ class MainWindow(QMainWindow):
                 pass
             self.status.showMessage("Browser profile reset", 2500)
             try:
-                self.toast_host.show_toast("Browser profile reset. Open Browser panel to reinitialize.")
+                self.toast_host.show_toast(
+                    "Browser profile reset. Open Browser panel to reinitialize."
+                )
             except Exception:
                 pass
         except Exception:
@@ -968,11 +1104,13 @@ class MainWindow(QMainWindow):
             # Help
             m_help = mb.addMenu("&Help")
             a_about = m_help.addAction("&About")
+
             def _about():
                 try:
                     QMessageBox.information(self, "About", "DeadHop\nPyQt6 with Qt WebEngine")
                 except Exception:
                     pass
+
             a_about.triggered.connect(_about)
         except Exception:
             pass
@@ -1047,123 +1185,41 @@ class MainWindow(QMainWindow):
 
     def _nick_color(self, nick: str) -> str:
         try:
-            s = (nick or '').lower().encode('utf-8')
+            s = (nick or "").lower().encode("utf-8")
             h = 0
             for b in s:
                 h = (h * 131 + int(b)) & 0xFFFFFFFF
             # map to pleasant hue range, fixed saturation/lightness
             hue = h % 360
+
             # Convert HSL to RGB (approx) for CSS hex
-            def hsl_to_rgb(h, s, l):
-                c = (1 - abs(2*l - 1)) * s
-                x = c * (1 - abs(((h/60) % 2) - 1))
-                m = l - c/2
+            def hsl_to_rgb(h, s, light):
+                c = (1 - abs(2 * light - 1)) * s
+                x = c * (1 - abs(((h / 60) % 2) - 1))
+                m = light - c / 2
                 if 0 <= h < 60:
-                    r,g,b = c,x,0
+                    r, g, b = c, x, 0
                 elif 60 <= h < 120:
-                    r,g,b = x,c,0
+                    r, g, b = x, c, 0
                 elif 120 <= h < 180:
-                    r,g,b = 0,c,x
+                    r, g, b = 0, c, x
                 elif 180 <= h < 240:
-                    r,g,b = 0,x,c
+                    r, g, b = 0, x, c
                 elif 240 <= h < 300:
-                    r,g,b = x,0,c
+                    r, g, b = x, 0, c
                 else:
-                    r,g,b = c,0,x
-                R = int((r+m)*255)
-                G = int((g+m)*255)
-                B = int((b+m)*255)
+                    r, g, b = c, 0, x
+                R = int((r + m) * 255)
+                G = int((g + m) * 255)
+                B = int((b + m) * 255)
                 return f"#{R:02x}{G:02x}{B:02x}"
+
             return hsl_to_rgb(hue, 0.65, 0.6)
         except Exception:
             return "#82b1ff"
 
     # ----- Chat WebView helpers -----
     def _init_chat_webview(self) -> None:
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset=\"utf-8\" />
-            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-            <style>
-            :root {
-                color-scheme: dark;
-                --bg1: #0f0f13;
-                --bg2: #141824;
-                --bg3: #0f1220;
-                --fg:  #e0e0e0;
-                --link: #82b1ff;
-            }
-            body {
-                margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-                background: #0f1116;
-                color: var(--fg);
-            }
-            #chat { padding: 12px 14px; }
-            a { color: var(--link); text-decoration: underline; cursor: pointer; }
-            .msg { margin: 8px 0; line-height: 1.42; word-wrap: break-word; }
-            .nick { color: #a78bfa; font-weight: 600; margin-right: 8px; }
-            .ts { opacity: .55; font-size: 12px; margin-right: 6px; }
-            .sys { opacity: .82; }
-            pre { background: rgba(255,255,255,0.04); padding: 8px; border-radius: 8px; overflow:auto }
-            code { background: rgba(255,255,255,0.06); padding: 2px 4px; border-radius: 4px }
-            /* Inline media sizing classes */
-            iframe, video { display: block; max-width: 100%; border: none; border-radius: 8px; }
-            .vid-s { width: 360px; max-width: 100%; }
-            .vid-m { width: 640px; max-width: 100%; }
-            .vid-l { width: 960px; max-width: 100%; }
-            @media (prefers-color-scheme: light) {
-                :root {
-                    --bg1: #f3f4f8;
-                    --bg2: #e9ecf6;
-                    --bg3: #f2f3f9;
-                    --fg:  #1a1a1a;
-                    --link: #2b5fd9;
-                }
-                body {
-                    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-                    background: #f4f6fb;
-                    color: var(--fg);
-                }
-            }
-            </style>
-                try {
-                    const root = document.documentElement;
-                    for (const k in vars) {
-                        root.style.setProperty('--' + k, vars[k]);
-                    }
-                } catch (e) {}
-            }
-            </script>
-        </head>
-        <body>
-            <div id=\"chat\"></div>
-          <script>
-            function toBottom(){ window.scrollTo(0, document.body.scrollHeight); }
-            function appendMessage(html){
-              const c = document.getElementById('chat');
-              const d = document.createElement('div');
-              d.className = 'msg';
-              d.innerHTML = html;
-              c.appendChild(d);
-              toBottom();
-            }
-            function startAI(){
-              const c = document.getElementById('chat');
-              const d = document.createElement('div');
-              d.className = 'msg';
-              d.innerHTML = '<b>AI:</b> <span id="ai-stream"></span>';
-              c.appendChild(d);
-              toBottom();
-            }
-            function aiChunk(text){
-              const s = document.getElementById('ai-stream');
-              if(s){ s.textContent += text; toBottom(); }
-            }
-          </script>
-        </body></html>
-        """
         try:
             base_html = """
             <!DOCTYPE html>
@@ -1247,21 +1303,23 @@ class MainWindow(QMainWindow):
             try:
                 # Intercept link clicks so we don't navigate the chat page; route instead
                 from PyQt6.QtWebEngineCore import QWebEnginePage
+
                 class _ChatPage(QWebEnginePage):
                     def __init__(self, win):
                         super().__init__(win)
                         self._win = win
+
                     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
                         try:
                             m = str(message)
                             src = str(sourceID)
                             # Filter common noisy messages
                             noisy = (
-                                'requestStorageAccessFor',
-                                'generate_204',
-                                'googleads.g.doubleclick.net',
-                                'CORS policy',
-                                'ResizeObserver loop completed',
+                                "requestStorageAccessFor",
+                                "generate_204",
+                                "googleads.g.doubleclick.net",
+                                "CORS policy",
+                                "ResizeObserver loop completed",
                             )
                             if any(s in m or s in src for s in noisy):
                                 return
@@ -1271,6 +1329,7 @@ class MainWindow(QMainWindow):
                             super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
                         except Exception:
                             pass
+
                     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
                         try:
                             # Only intercept user-initiated link clicks
@@ -1284,6 +1343,7 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
                 try:
                     self.chat.setPage(_ChatPage(self))
                 except Exception:
@@ -1350,7 +1410,7 @@ class MainWindow(QMainWindow):
             buf = self._scrollback.setdefault(cur, [])
             buf.append(html)
             if len(buf) > self._scrollback_limit:
-                del buf[:-self._scrollback_limit]
+                del buf[: -self._scrollback_limit]
             # Persist to disk best-effort
             self._scrollback_save(cur, buf)
         except Exception:
@@ -1391,9 +1451,12 @@ class MainWindow(QMainWindow):
             if not base:
                 return None
             import os
+
             os.makedirs(base, exist_ok=True)
             # sanitize filename
-            safe = ''.join(c if c.isalnum() or c in ('#','-','_','@','.',':','+') else '_' for c in ch)
+            safe = "".join(
+                c if c.isalnum() or c in ("#", "-", "_", "@", ".", ":", "+") else "_" for c in ch
+            )
             return os.path.join(base, f"scrollback_{safe}.json")
         except Exception:
             return None
@@ -1404,8 +1467,9 @@ class MainWindow(QMainWindow):
             if not path:
                 return
             import json as _json
-            data = buf[-self._scrollback_limit:]
-            with open(path, 'w', encoding='utf-8') as f:
+
+            data = buf[-self._scrollback_limit :]
+            with open(path, "w", encoding="utf-8") as f:
                 _json.dump(data, f, ensure_ascii=False)
         except Exception:
             pass
@@ -1417,12 +1481,13 @@ class MainWindow(QMainWindow):
                 return None
             import json as _json
             import os
+
             if not os.path.exists(path):
                 return None
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding="utf-8") as f:
                 data = _json.load(f)
             if isinstance(data, list):
-                return [str(x) for x in data][-self._scrollback_limit:]
+                return [str(x) for x in data][-self._scrollback_limit :]
         except Exception:
             pass
         return None
@@ -1462,7 +1527,7 @@ class MainWindow(QMainWindow):
                 pass
             self._run_ai_inference(cur, text)
         else:
-            if text.startswith('/'):
+            if text.startswith("/"):
                 self._handle_command(text, cur)
             else:
                 try:
@@ -1479,24 +1544,28 @@ class MainWindow(QMainWindow):
         """Generate a randomized default nick (e.g., peach1234)."""
         try:
             import secrets
-            return f"peach{secrets.randbelow(9000)+1000}"
+
+            return f"peach{secrets.randbelow(9000) + 1000}"
         except Exception:
             import random
-            return f"peach{random.randint(1000,9999)}"
+
+            return f"peach{random.randint(1000, 9999)}"
 
     def _handle_command(self, cmdline: str, cur: str) -> None:
         cmdline = (cmdline or "").strip()
         if not cmdline:
             return
-        if not cmdline.startswith('/'):
+        if not cmdline.startswith("/"):
             return
         parts = cmdline[1:].split(None, 1)
-        cmd = parts[0].lower() if parts else ''
-        arg = parts[1] if len(parts) > 1 else ''
+        cmd = parts[0].lower() if parts else ""
+        arg = parts[1] if len(parts) > 1 else ""
+
         def _raw(s: str) -> None:
             self._send_raw(s)
+
         def _send_to(target: str, msg: str) -> bool:
-            fn = getattr(self.bridge, 'sendMessageTo', None)
+            fn = getattr(self.bridge, "sendMessageTo", None)
             if callable(fn):
                 try:
                     # Bridge slot may be async; schedule safely
@@ -1505,6 +1574,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
             return False
+
         if cmd in ("me",):
             # /me action
             action = arg.strip()
@@ -1518,17 +1588,17 @@ class MainWindow(QMainWindow):
                 _raw(f"PRIVMSG {target} :\x01ACTION {action}\x01")
             # No local echo here; we'll format on _on_message when echo arrives
         elif cmd in ("join", "j"):
-            ch = (arg or '').strip()
+            ch = (arg or "").strip()
             if ch:
                 self._join_channel(ch)
         elif cmd == "nick":
-            newn = (arg or '').strip()
+            newn = (arg or "").strip()
             if newn:
                 self._change_nick(newn)
         elif cmd in ("part", "leave"):
             ch = arg.strip() or cur
-            if ch and not ch.startswith(('#', '&')):
-                ch = '#' + ch
+            if ch and not ch.startswith(("#", "&")):
+                ch = "#" + ch
             if ch:
                 try:
                     self.bridge.partChannel(ch)
@@ -1542,7 +1612,7 @@ class MainWindow(QMainWindow):
         elif cmd == "msg":
             # /msg <target> <message>
             try:
-                target, msg = arg.split(' ', 1)
+                target, msg = arg.split(" ", 1)
             except ValueError:
                 return
             target = target.strip()
@@ -1567,12 +1637,12 @@ class MainWindow(QMainWindow):
                 _raw(f"WHOIS {nick}")
         elif cmd == "topic":
             # /topic [#chan] new topic
-            if arg.startswith('#') and ' ' in arg:
-                ch, topic = arg.split(' ', 1)
+            if arg.startswith("#") and " " in arg:
+                ch, topic = arg.split(" ", 1)
             else:
                 ch, topic = cur, arg
-            ch = (ch or '').strip()
-            topic = (topic or '').strip()
+            ch = (ch or "").strip()
+            topic = (topic or "").strip()
             if ch and topic:
                 try:
                     self.bridge.setTopic(ch, topic)
@@ -1581,7 +1651,7 @@ class MainWindow(QMainWindow):
         elif cmd == "mode":
             # /mode <target> <modes>
             try:
-                target, modes = arg.split(' ', 1)
+                target, modes = arg.split(" ", 1)
             except ValueError:
                 return
             target = target.strip()
@@ -1598,7 +1668,7 @@ class MainWindow(QMainWindow):
         else:
             # Unknown: try as raw
             if arg:
-                _raw(parts[0].upper() + ' ' + arg)
+                _raw(parts[0].upper() + " " + arg)
             else:
                 _raw(parts[0].upper())
 
@@ -1616,7 +1686,7 @@ class MainWindow(QMainWindow):
             return label[4:-1]
         # Find a channel token
         for tok in re.split(r"\s+|,", label):
-            if tok.startswith('#'):
+            if tok.startswith("#"):
                 return tok
         return label
 
@@ -1705,7 +1775,34 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
 
-                if code in {"311", "312", "317", "318", "319", "330", "671", "313", "338", "301", "005", "375", "372", "376", "422", "321", "322", "323", "433", "471", "473", "474", "475", "401", "402", "404"}:
+                if code in {
+                    "311",
+                    "312",
+                    "317",
+                    "318",
+                    "319",
+                    "330",
+                    "671",
+                    "313",
+                    "338",
+                    "301",
+                    "005",
+                    "375",
+                    "372",
+                    "376",
+                    "422",
+                    "321",
+                    "322",
+                    "323",
+                    "433",
+                    "471",
+                    "473",
+                    "474",
+                    "475",
+                    "401",
+                    "402",
+                    "404",
+                }:
                     try:
                         # Extract target nick if present
                         target_nick = None
@@ -1761,13 +1858,13 @@ class MainWindow(QMainWindow):
                                     tokens.append(tok)
                                 mp = self._isupport_by_net.setdefault(net, {})
                                 for tok in tokens:
-                                    if '=' in tok:
-                                        k, v = tok.split('=', 1)
+                                    if "=" in tok:
+                                        k, v = tok.split("=", 1)
                                         mp[k] = v
                                     else:
                                         mp[tok] = "1"
                                 # Display a compact line
-                                view = ' '.join(tokens[:12]) + (" …" if len(tokens) > 12 else "")
+                                view = " ".join(tokens[:12]) + (" …" if len(tokens) > 12 else "")
                                 server_emit(f"ISUPPORT: {view}")
                             except Exception:
                                 pass
@@ -1816,7 +1913,7 @@ class MainWindow(QMainWindow):
                     if len(parts) >= 2 and parts[0].startswith(":"):
                         prefix = parts[0][1:]
                         cmd = parts[1].upper()
-                        nick = prefix.split('!', 1)[0]
+                        nick = prefix.split("!", 1)[0]
 
                         def channel_emit(comp: str, text: str) -> None:
                             try:
@@ -1824,18 +1921,24 @@ class MainWindow(QMainWindow):
                                     return
                                 # Persist to scrollback
                                 sb = self._scrollback.setdefault(comp, [])
-                                html = f"<span class='sys'><i>{self._strip_irc_codes(text)}</i></span>"
+                                html = (
+                                    f"<span class='sys'><i>{self._strip_irc_codes(text)}</i></span>"
+                                )
                                 sb.append(html)
                                 if len(sb) > self._scrollback_limit:
-                                    del sb[:-self._scrollback_limit]
+                                    del sb[: -self._scrollback_limit]
                                 # Live render if active
                                 if (self.bridge.current_channel() or "") == comp:
-                                    self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+                                    self.chat.page().runJavaScript(
+                                        f"appendMessage({json.dumps(html)})"
+                                    )
                                 else:
                                     # Increment unread for that channel
                                     try:
                                         self._unread[comp] = self._unread.get(comp, 0) + 1
-                                        self.sidebar.set_unread(comp, self._unread[comp], self._highlights.get(comp, 0))
+                                        self.sidebar.set_unread(
+                                            comp, self._unread[comp], self._highlights.get(comp, 0)
+                                        )
                                     except Exception:
                                         pass
                             except Exception:
@@ -1849,7 +1952,9 @@ class MainWindow(QMainWindow):
                                     self._names_by_channel[comp] = sorted(names)
                                     if (self.bridge.current_channel() or "") == comp:
                                         self.members.set_members(list(self._names_by_channel[comp]))
-                                        self.composer.set_completion_names(list(self._names_by_channel[comp]))
+                                        self.composer.set_completion_names(
+                                            list(self._names_by_channel[comp])
+                                        )
                             except Exception:
                                 pass
 
@@ -1870,7 +1975,7 @@ class MainWindow(QMainWindow):
                             try:
                                 if not net:
                                     return None
-                                chn = chan.lstrip(':')
+                                chn = chan.lstrip(":")
                                 return f"{net}:{chn}"
                             except Exception:
                                 return None
@@ -1887,7 +1992,11 @@ class MainWindow(QMainWindow):
                             reason = raw.split(":", 2)[-1] if ":" in raw else ""
                             comp = comp_for_chan(ch)
                             if comp:
-                                txt = f"• {nick} left {ch} ({reason})" if reason else f"• {nick} left {ch}"
+                                txt = (
+                                    f"• {nick} left {ch} ({reason})"
+                                    if reason
+                                    else f"• {nick} left {ch}"
+                                )
                                 channel_emit(comp, txt)
                                 members_remove(comp, nick)
                             return
@@ -1898,12 +2007,14 @@ class MainWindow(QMainWindow):
                                 if not comp.startswith(f"{net}:"):
                                     continue
                                 if nick in names:
-                                    txt = f"• {nick} quit ({reason})" if reason else f"• {nick} quit"
+                                    txt = (
+                                        f"• {nick} quit ({reason})" if reason else f"• {nick} quit"
+                                    )
                                     channel_emit(comp, txt)
                                     members_remove(comp, nick)
                             return
                         if cmd == "NICK" and len(parts) >= 3:
-                            new_nick = parts[2].lstrip(':')
+                            new_nick = parts[2].lstrip(":")
                             for comp, names in list(self._names_by_channel.items()):
                                 if not comp.startswith(f"{net}:"):
                                     continue
@@ -1914,8 +2025,12 @@ class MainWindow(QMainWindow):
                                         updated = [new_nick if x == nick else x for x in names]
                                         self._names_by_channel[comp] = sorted(set(updated))
                                         if (self.bridge.current_channel() or "") == comp:
-                                            self.members.set_members(list(self._names_by_channel[comp]))
-                                            self.composer.set_completion_names(list(self._names_by_channel[comp]))
+                                            self.members.set_members(
+                                                list(self._names_by_channel[comp])
+                                            )
+                                            self.composer.set_completion_names(
+                                                list(self._names_by_channel[comp])
+                                            )
                                     except Exception:
                                         pass
                             return
@@ -1928,8 +2043,12 @@ class MainWindow(QMainWindow):
                             return
                         if cmd == "MODE" and len(parts) >= 4:
                             target = parts[2]
-                            modes = ' '.join(parts[3:])
-                            comp = comp_for_chan(target) if target.startswith(('#','&','+','!')) else None
+                            modes = " ".join(parts[3:])
+                            comp = (
+                                comp_for_chan(target)
+                                if target.startswith(("#", "&", "+", "!"))
+                                else None
+                            )
                             if comp:
                                 channel_emit(comp, f"• mode/{target} {modes}")
                             else:
@@ -1947,17 +2066,17 @@ class MainWindow(QMainWindow):
         if not txt:
             return
         # Filter out raw protocol echoes and noisy lines
-        if '>>' in txt:
+        if ">>" in txt:
             return
         # Drop lines that are only a bracketed network prefix like "[net]" or "[net]   "
-        if txt.startswith('[') and ']' in txt and not txt.split(']', 1)[1].strip():
+        if txt.startswith("[") and "]" in txt and not txt.split("]", 1)[1].strip():
             return
         low = txt.lower()
         allowed = (
-            ('connecting to ' in low) or
-            ('connected. registering' in low) or
-            ('registering (nick/user sent)' in low) or
-            ('001 welcome received' in low)
+            ("connecting to " in low)
+            or ("connected. registering" in low)
+            or ("registering (nick/user sent)" in low)
+            or ("001 welcome received" in low)
         )
         if not allowed:
             return
@@ -2101,7 +2220,10 @@ class MainWindow(QMainWindow):
         s.setValue("highlight_words", list(self._highlight_keywords))
         # friends from widget
         try:
-            fr = [self.friends.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.friends.list.count())]
+            fr = [
+                self.friends.list.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self.friends.list.count())
+            ]
             s.setValue("friends", fr)
         except Exception:
             pass
@@ -2112,10 +2234,18 @@ class MainWindow(QMainWindow):
             pass
         # presence notify prefs
         try:
-            s.setValue("notify/presence_online", bool(getattr(self, "_notify_presence_online", True)))
-            s.setValue("notify/presence_offline", bool(getattr(self, "_notify_presence_offline", False)))
-            s.setValue("notify/presence_system", bool(getattr(self, "_notify_presence_system", True)))
-            s.setValue("notify/presence_sound", bool(getattr(self, "_notify_presence_sound", False)))
+            s.setValue(
+                "notify/presence_online", bool(getattr(self, "_notify_presence_online", True))
+            )
+            s.setValue(
+                "notify/presence_offline", bool(getattr(self, "_notify_presence_offline", False))
+            )
+            s.setValue(
+                "notify/presence_system", bool(getattr(self, "_notify_presence_system", True))
+            )
+            s.setValue(
+                "notify/presence_sound", bool(getattr(self, "_notify_presence_sound", False))
+            )
         except Exception:
             pass
         # Persist geometry and splitter state
@@ -2137,7 +2267,7 @@ class MainWindow(QMainWindow):
         finally:
             # Ensure tray icon is hidden and cleaned up on exit
             try:
-                if getattr(self, 'tray', None) is not None:
+                if getattr(self, "tray", None) is not None:
                     try:
                         self.tray.hide()
                     except Exception:
@@ -2191,7 +2321,8 @@ class MainWindow(QMainWindow):
             pass
 
     def _init_quick_toolbar(self) -> None:
-        from PyQt6.QtWidgets import QToolBar, QLabel, QComboBox, QSlider, QLineEdit, QPushButton, QInputDialog
+        from PyQt6.QtWidgets import QComboBox, QInputDialog, QSlider
+
         tb = QToolBar("Quick")
         tb.setMovable(False)
         tb.setFloatable(False)
@@ -2203,11 +2334,14 @@ class MainWindow(QMainWindow):
         sld.setMinimum(9)
         sld.setMaximum(22)
         try:
-            cur_pt = int(self._chat_font_size) if self._chat_font_size else self.font().pointSize() or 12
+            cur_pt = (
+                int(self._chat_font_size) if self._chat_font_size else self.font().pointSize() or 12
+            )
         except Exception:
             cur_pt = 12
         sld.setValue(max(9, min(22, int(cur_pt))))
         sld.setFixedWidth(140)
+
         def on_font_changed(val: int) -> None:
             try:
                 self._chat_font_size = int(val)
@@ -2215,6 +2349,7 @@ class MainWindow(QMainWindow):
                 self._chat_font_size = 12
             self._apply_global_font_size(int(self._chat_font_size))
             self._save_settings()
+
         sld.valueChanged.connect(on_font_changed)
         tb.addWidget(sld)
 
@@ -2225,12 +2360,16 @@ class MainWindow(QMainWindow):
         themes: list[str] = []
         try:
             from qt_material import list_themes
-            themes = ["Material Dark", "Material Light"] + [t for t in list(list_themes()) if t not in ("Material Dark", "Material Light")]
+
+            themes = ["Material Dark", "Material Light"] + [
+                t for t in list(list_themes()) if t not in ("Material Dark", "Material Light")
+            ]
         except Exception:
             themes = ["Material Dark", "Material Light"]
         cbo_theme.addItems(themes)
         if self._current_theme and self._current_theme in themes:
             cbo_theme.setCurrentText(self._current_theme)
+
         def on_theme(name: str) -> None:
             self._current_theme = name
             try:
@@ -2238,6 +2377,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self._save_settings()
+
         cbo_theme.currentTextChanged.connect(on_theme)
         tb.addWidget(cbo_theme)
 
@@ -2247,10 +2387,12 @@ class MainWindow(QMainWindow):
         cbo_wrap = QComboBox()
         cbo_wrap.addItems(["On", "Off"])
         cbo_wrap.setCurrentText("On" if self._word_wrap else "Off")
+
         def on_wrap(txt: str) -> None:
-            self._word_wrap = (txt == "On")
+            self._word_wrap = txt == "On"
             self._set_word_wrap(self._word_wrap)
             self._save_settings()
+
         cbo_wrap.currentTextChanged.connect(on_wrap)
         tb.addWidget(cbo_wrap)
 
@@ -2260,10 +2402,12 @@ class MainWindow(QMainWindow):
         cbo_ts = QComboBox()
         cbo_ts.addItems(["Off", "On"])  # default off like settings
         cbo_ts.setCurrentText("On" if self._show_timestamps else "Off")
+
         def on_ts(txt: str) -> None:
-            self._show_timestamps = (txt == "On")
+            self._show_timestamps = txt == "On"
             self._set_timestamps(self._show_timestamps)
             self._save_settings()
+
         cbo_ts.currentTextChanged.connect(on_ts)
         tb.addWidget(cbo_ts)
 
@@ -2273,11 +2417,13 @@ class MainWindow(QMainWindow):
         join_box = QLineEdit()
         join_box.setPlaceholderText("#channel")
         join_box.setFixedWidth(140)
+
         def do_join():
             ch = join_box.text().strip()
             if ch:
                 self._join_channel(ch)
                 join_box.clear()
+
         join_box.returnPressed.connect(do_join)
         tb.addWidget(join_box)
         btn_join = QPushButton("+")
@@ -2288,6 +2434,7 @@ class MainWindow(QMainWindow):
         # Change nick quick control (button opens prompt)
         tb.addSeparator()
         btn_nick = QPushButton("Nick…")
+
         def on_nick():
             try:
                 cur_nick = ""  # we may not have it; allow blank
@@ -2296,6 +2443,7 @@ class MainWindow(QMainWindow):
                     self._change_nick(new.strip())
             except Exception:
                 pass
+
         btn_nick.clicked.connect(on_nick)
         tb.addWidget(btn_nick)
 
@@ -2323,7 +2471,6 @@ class MainWindow(QMainWindow):
         tb.addWidget(btn_dx)
 
         # Notifications toggles
-        from PyQt6.QtWidgets import QCheckBox
         tb.addSeparator()
         tb.addWidget(QLabel(" Notify "))
         chk_toast = QCheckBox("Toast")
@@ -2332,6 +2479,7 @@ class MainWindow(QMainWindow):
         chk_toast.setChecked(getattr(self, "_notify_toast", True))
         chk_tray.setChecked(getattr(self, "_notify_tray", True))
         chk_sound.setChecked(getattr(self, "_notify_sound", True))
+
         def on_toast(v: bool) -> None:
             self._notify_toast = bool(v)
             try:
@@ -2339,6 +2487,7 @@ class MainWindow(QMainWindow):
                 s.setValue("notify/toast", bool(v))
             except Exception:
                 pass
+
         def on_tray(v: bool) -> None:
             self._notify_tray = bool(v)
             try:
@@ -2346,6 +2495,7 @@ class MainWindow(QMainWindow):
                 s.setValue("notify/tray", bool(v))
             except Exception:
                 pass
+
         def on_sound(v: bool) -> None:
             self._notify_sound = bool(v)
             try:
@@ -2353,6 +2503,7 @@ class MainWindow(QMainWindow):
                 s.setValue("notify/sound", bool(v))
             except Exception:
                 pass
+
         chk_toast.toggled.connect(on_toast)
         chk_tray.toggled.connect(on_tray)
         chk_sound.toggled.connect(on_sound)
@@ -2376,6 +2527,7 @@ class MainWindow(QMainWindow):
         self._se_hl = None
         try:
             from PyQt6.QtMultimedia import QSoundEffect
+
             base = Path(__file__).resolve().parents[1] / "resources" / "sounds"
             msg = base / "message.wav"
             hl = base / "highlight.wav"
@@ -2413,6 +2565,7 @@ class MainWindow(QMainWindow):
                     se.play()
                 else:
                     from PyQt6.QtWidgets import QApplication
+
                     QApplication.beep()
         except Exception:
             pass
@@ -2422,8 +2575,10 @@ class MainWindow(QMainWindow):
         if not ch:
             return
         # Ensure channel starts with '#'
-        if not (ch.startswith('#') or ch.startswith('&') or ch.startswith('+') or ch.startswith('!')):
-            ch = '#' + ch
+        if not (
+            ch.startswith("#") or ch.startswith("&") or ch.startswith("+") or ch.startswith("!")
+        ):
+            ch = "#" + ch
         # Determine target network from current channel or selected network in the tree
         composite = None
         try:
@@ -2438,7 +2593,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            fn = getattr(self.bridge, 'joinChannel', None)
+            fn = getattr(self.bridge, "joinChannel", None)
             if callable(fn) and composite:
                 self._schedule_async(fn, composite)
                 return
@@ -2448,7 +2603,7 @@ class MainWindow(QMainWindow):
         self._send_raw(f"JOIN {ch}")
 
     def _change_nick(self, nick: str) -> None:
-        nick = (nick or '').strip()
+        nick = (nick or "").strip()
         if not nick:
             return
         # Prefer raw NICK (works on all networks)
@@ -2510,11 +2665,13 @@ class MainWindow(QMainWindow):
         theme_options: list[str] = []
         try:
             from qt_material import list_themes
+
             theme_options = list(list_themes()) or []
         except Exception:
             if _theme_manager is not None:
                 theme_options = ["Material Dark", "Material Light"]
         from .dialogs.settings_dialog import SettingsDialog
+
         fam = self.chat.font().family()
         pt = self.chat.font().pointSize()
         # Guard against invalid point size (-1 when unset/pixel-based). Use a sane default.
@@ -2531,20 +2688,25 @@ class MainWindow(QMainWindow):
             auto = s.value("server/autoconnect", True, type=bool)
         except Exception:
             pass
-        dlg = SettingsDialog(self,
-                         theme_options=theme_options,
-                         current_theme=self._current_theme,
-                         opacity=float(self.windowOpacity()),
-                         font_family=fam,
-                         font_point_size=pt,
-                         highlight_words=self._highlight_keywords,
-                         friends=[self.friends.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.friends.list.count())],
-                         word_wrap=self._word_wrap,
-                         show_timestamps=self._show_timestamps,
-                         autoconnect=auto,
-                         auto_negotiate=bool(getattr(self, "_auto_negotiate", True)),
-                         prefer_tls=bool(getattr(self, "_prefer_tls", True)),
-                         try_starttls=bool(getattr(self, "_try_starttls", False)))
+        dlg = SettingsDialog(
+            self,
+            theme_options=theme_options,
+            current_theme=self._current_theme,
+            opacity=float(self.windowOpacity()),
+            font_family=fam,
+            font_point_size=pt,
+            highlight_words=self._highlight_keywords,
+            friends=[
+                self.friends.list.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self.friends.list.count())
+            ],
+            word_wrap=self._word_wrap,
+            show_timestamps=self._show_timestamps,
+            autoconnect=auto,
+            auto_negotiate=bool(getattr(self, "_auto_negotiate", True)),
+            prefer_tls=bool(getattr(self, "_prefer_tls", True)),
+            try_starttls=bool(getattr(self, "_try_starttls", False)),
+        )
         if dlg.exec() == dlg.DialogCode.Accepted:
             # Theme
             sel = dlg.selected_theme()
@@ -2593,7 +2755,7 @@ class MainWindow(QMainWindow):
                 self._auto_negotiate = dlg.selected_auto_negotiate()
                 self._prefer_tls = dlg.selected_prefer_tls()
                 # Optional STARTTLS attempt preference
-                if hasattr(dlg, 'selected_try_starttls'):
+                if hasattr(dlg, "selected_try_starttls"):
                     self._try_starttls = dlg.selected_try_starttls()
             except Exception:
                 pass
@@ -2607,8 +2769,19 @@ class MainWindow(QMainWindow):
         self._save_settings()
 
     # ---- Server persistence / autoconnect ----
-    def _save_server_settings(self, host: str, port: int, tls: bool, nick: str, user: str, realname: str,
-                               channels: list[str], autoconnect: bool, password: str | None, sasl_user: str | None) -> None:
+    def _save_server_settings(
+        self,
+        host: str,
+        port: int,
+        tls: bool,
+        nick: str,
+        user: str,
+        realname: str,
+        channels: list[str],
+        autoconnect: bool,
+        password: str | None,
+        sasl_user: str | None,
+    ) -> None:
         try:
             s = QSettings("DeadHop", "DeadHopClient")
             s.setValue("server/host", host)
@@ -2643,7 +2816,18 @@ class MainWindow(QMainWindow):
             # Default autoconnect enabled
             autoconnect = s.value("server/autoconnect", True, type=bool)
             if host and nick:
-                return host, int(port), bool(tls), nick, user or "deadhop", realname or "DeadHop", list(channels), password, sasl_user, bool(autoconnect)
+                return (
+                    host,
+                    int(port),
+                    bool(tls),
+                    nick,
+                    user or "deadhop",
+                    realname or "DeadHop",
+                    list(channels),
+                    password,
+                    sasl_user,
+                    bool(autoconnect),
+                )
         except Exception:
             pass
         return None
@@ -2669,17 +2853,44 @@ class MainWindow(QMainWindow):
         if tls:
             self._apply_tls_ignore_setting(ignore)
         try:
-            self._schedule_async(self.bridge.connectHost, host, port, tls, nick, user, realname, channels, password, sasl_user, bool(ignore))
+            self._schedule_async(
+                self.bridge.connectHost,
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                channels,
+                password,
+                sasl_user,
+                bool(ignore),
+            )
             if getattr(self, "_auto_negotiate", True):
                 # Best-effort: kick off negotiation shortly after connect
-                self._schedule_async(self._negotiate_on_connect, host, nick, user, password, sasl_user)
+                self._schedule_async(
+                    self._negotiate_on_connect, host, nick, user, password, sasl_user
+                )
             self.status.showMessage(f"Auto-connecting to {host}:{port}…", 2000)
             self._my_nick = nick
         except Exception:
             try:
-                self.bridge.connectHost(host, port, tls, nick, user, realname, channels, password, sasl_user, bool(ignore))
+                self.bridge.connectHost(
+                    host,
+                    port,
+                    tls,
+                    nick,
+                    user,
+                    realname,
+                    channels,
+                    password,
+                    sasl_user,
+                    bool(ignore),
+                )
                 if getattr(self, "_auto_negotiate", True):
-                    self._schedule_async(self._negotiate_on_connect, host, nick, user, password, sasl_user)
+                    self._schedule_async(
+                        self._negotiate_on_connect, host, nick, user, password, sasl_user
+                    )
             except Exception:
                 pass
 
@@ -2748,17 +2959,26 @@ class MainWindow(QMainWindow):
         elif action == "query":
             label = f"[PM:{nick}]"
             try:
-                self.sidebar.set_channels([label])
+                # Add PM tab without collapsing existing server trees
+                if label not in self._channel_labels:
+                    self._channel_labels.append(label)
+                self.sidebar.set_channels(self._channel_labels)
                 self.sidebar.set_unread(label, 0, 0)
             except Exception:
                 pass
             self.bridge.set_current_channel(label)
         elif action == "kick":
             ch = self.bridge.current_channel() or ""
-            reason, ok = QInputDialog.getText(self, "Kick", f"Reason for kicking {nick} from {ch}:", text="")
+            reason, ok = QInputDialog.getText(
+                self, "Kick", f"Reason for kicking {nick} from {ch}:", text=""
+            )
             if ok:
                 sent = False
-                for meth, cmd in (("kickUser", None), ("sendRaw", f"KICK {ch} {nick} :{reason}"), ("sendCommand", f"KICK {ch} {nick} :{reason}")):
+                for meth, cmd in (
+                    ("kickUser", None),
+                    ("sendRaw", f"KICK {ch} {nick} :{reason}"),
+                    ("sendCommand", f"KICK {ch} {nick} :{reason}"),
+                ):
                     fn = getattr(self.bridge, meth, None)
                     if callable(fn):
                         try:
@@ -2771,10 +2991,16 @@ class MainWindow(QMainWindow):
                     self.toast_host.show_toast("Kick not implemented in bridge")
         elif action == "ban":
             ch = self.bridge.current_channel() or ""
-            mask, ok = QInputDialog.getText(self, "Ban", f"Ban mask or nick for {ch} (e.g. {nick} or *!*@host):", text=nick)
+            mask, ok = QInputDialog.getText(
+                self, "Ban", f"Ban mask or nick for {ch} (e.g. {nick} or *!*@host):", text=nick
+            )
             if ok and mask.strip():
                 sent = False
-                for meth, cmd in (("setModes", None), ("sendRaw", f"MODE {ch} +b {mask}"), ("sendCommand", f"MODE {ch} +b {mask}")):
+                for meth, cmd in (
+                    ("setModes", None),
+                    ("sendRaw", f"MODE {ch} +b {mask}"),
+                    ("sendCommand", f"MODE {ch} +b {mask}"),
+                ):
                     fn = getattr(self.bridge, meth, None)
                     if callable(fn):
                         try:
@@ -2788,7 +3014,11 @@ class MainWindow(QMainWindow):
         elif action == "op":
             ch = self.bridge.current_channel() or ""
             sent = False
-            for meth, cmd in (("setModes", None), ("sendRaw", f"MODE {ch} +o {nick}"), ("sendCommand", f"MODE {ch} +o {nick}")):
+            for meth, cmd in (
+                ("setModes", None),
+                ("sendRaw", f"MODE {ch} +o {nick}"),
+                ("sendCommand", f"MODE {ch} +o {nick}"),
+            ):
                 fn = getattr(self.bridge, meth, None)
                 if callable(fn):
                     try:
@@ -2802,7 +3032,11 @@ class MainWindow(QMainWindow):
         elif action == "deop":
             ch = self.bridge.current_channel() or ""
             sent = False
-            for meth, cmd in (("setModes", None), ("sendRaw", f"MODE {ch} -o {nick}"), ("sendCommand", f"MODE {ch} -o {nick}")):
+            for meth, cmd in (
+                ("setModes", None),
+                ("sendRaw", f"MODE {ch} -o {nick}"),
+                ("sendCommand", f"MODE {ch} -o {nick}"),
+            ):
                 fn = getattr(self.bridge, meth, None)
                 if callable(fn):
                     try:
@@ -2822,6 +3056,7 @@ class MainWindow(QMainWindow):
             return
         try:
             from PyQt6.QtWebEngineCore import QWebEnginePage
+
             flags = QWebEnginePage.FindFlag(0)
             if not forward:
                 flags = QWebEnginePage.FindFlag.FindBackward
@@ -2877,6 +3112,7 @@ class MainWindow(QMainWindow):
         try:
             from PyQt6.QtWidgets import QApplication
             from qt_material import apply_stylesheet, list_themes
+
             app = QApplication.instance()
             if app:
                 themes = list_themes()
@@ -2885,17 +3121,23 @@ class MainWindow(QMainWindow):
                     candidates = []
                     base = (chosen or "").replace(".xml", "")
                     if base.endswith("_dark"):
-                        base_color = base[:-5]
-                    candidates.extend([
-                        f"{base}.xml",
-                        f"{base}_dark.xml",
-                        f"{base}_light.xml",
-                        f"dark_{base}.xml",
-                        f"light_{base}.xml",
-                    ])
+                        base[:-5]
+                    candidates.extend(
+                        [
+                            f"{base}.xml",
+                            f"{base}_dark.xml",
+                            f"{base}_light.xml",
+                            f"dark_{base}.xml",
+                            f"light_{base}.xml",
+                        ]
+                    )
                     chosen = next((c for c in candidates if c in themes), None)
                 if not chosen:
-                    chosen = "dark_teal.xml" if "dark_teal.xml" in themes else (themes[0] if themes else None)
+                    chosen = (
+                        "dark_teal.xml"
+                        if "dark_teal.xml" in themes
+                        else (themes[0] if themes else None)
+                    )
                 if chosen:
                     apply_stylesheet(app, theme=chosen)
         except Exception:
@@ -2936,7 +3178,9 @@ class MainWindow(QMainWindow):
 
     def _edit_highlight_words(self) -> None:
         cur = ", ".join(self._highlight_keywords)
-        text, ok = QInputDialog.getText(self, "Highlight Words", "Comma-separated keywords:", text=cur)
+        text, ok = QInputDialog.getText(
+            self, "Highlight Words", "Comma-separated keywords:", text=cur
+        )
         if ok:
             self._highlight_keywords = [w.strip() for w in text.split(",") if w.strip()]
 
@@ -2955,6 +3199,7 @@ class MainWindow(QMainWindow):
             self.setFont(font)
             # also set in application for consistency
             from PyQt6.QtWidgets import QApplication
+
             app = QApplication.instance()
             if app:
                 app.setFont(font)
@@ -2965,7 +3210,7 @@ class MainWindow(QMainWindow):
         tm = _theme_manager()
         tm.set_var("radius", f"{px}px")
         tm.apply()
-        
+
     # ----- Bridge callbacks -----
     def _on_message(self, nick: str, target: str, text: str, ts: float) -> None:
         # Route to chat only if matches current channel
@@ -2975,7 +3220,7 @@ class MainWindow(QMainWindow):
                 msg = text or ""
                 # CTCP ACTION formatting: \x01ACTION ...\x01 -> "* nick ..."
                 if msg.startswith("\x01ACTION ") and msg.endswith("\x01"):
-                    act = msg[len("\x01ACTION "):-1].strip()
+                    act = msg[len("\x01ACTION ") : -1].strip()
                     rendered = self._format_message_html(nick, f"* {act}", ts)
                 else:
                     rendered = self._format_message_html(nick, self._strip_irc_codes(msg), ts)
@@ -2993,7 +3238,7 @@ class MainWindow(QMainWindow):
                 self._unread[target] = self._unread.get(target, 0) + 1
             # basic highlight: mention of our nick or keywords
             hl = False
-            low = (text or '').lower()
+            low = (text or "").lower()
             if self._my_nick and self._my_nick.lower() in low:
                 hl = True
             else:
@@ -3006,22 +3251,33 @@ class MainWindow(QMainWindow):
                 self._highlights[target] = self._highlights.get(target, 0) + 1
                 # Notification on highlight
                 try:
-                    ch = target.split(':', 1)[-1]
-                    self._notify_event(f"Mention in {ch}", f"{nick}: {self._strip_irc_codes(text)}", highlight=True)
+                    ch = target.split(":", 1)[-1]
+                    self._notify_event(
+                        f"Mention in {ch}", f"{nick}: {self._strip_irc_codes(text)}", highlight=True
+                    )
                 except Exception:
                     pass
             else:
                 # Non-highlight unread notification (only when not current)
                 if target != cur:
                     try:
-                        ch = target.split(':', 1)[-1]
-                        self._notify_event(f"New message in {ch}", f"{nick}: {self._strip_irc_codes(text)}", highlight=False)
+                        ch = target.split(":", 1)[-1]
+                        self._notify_event(
+                            f"New message in {ch}",
+                            f"{nick}: {self._strip_irc_codes(text)}",
+                            highlight=False,
+                        )
                     except Exception:
                         pass
                 # tray notification
                 try:
                     if self.tray is not None:
-                        self.tray.showMessage(f"Highlight in {target}", f"{nick}: {text}", QSystemTrayIcon.MessageIcon.Information, 5000)
+                        self.tray.showMessage(
+                            f"Highlight in {target}",
+                            f"{nick}: {text}",
+                            QSystemTrayIcon.MessageIcon.Information,
+                            5000,
+                        )
                 except Exception:
                     pass
                 # sound
@@ -3033,7 +3289,9 @@ class MainWindow(QMainWindow):
                     pass
                 # update sidebar labels
                 try:
-                    self.sidebar.set_unread(target, self._unread.get(target, 0), self._highlights.get(target, 0))
+                    self.sidebar.set_unread(
+                        target, self._unread.get(target, 0), self._highlights.get(target, 0)
+                    )
                 except Exception:
                     pass
         # Logging
@@ -3079,7 +3337,9 @@ class MainWindow(QMainWindow):
                 pass
             # Clear chat view and replay server status buffer for this net
             try:
-                self.chat.page().runJavaScript("(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();")
+                self.chat.page().runJavaScript(
+                    "(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();"
+                )
             except Exception:
                 pass
             try:
@@ -3122,7 +3382,7 @@ class MainWindow(QMainWindow):
             html = f"<span class='sys'><i>{self._strip_irc_codes(text)}</i></span>"
             sb.append(html)
             if len(sb) > self._scrollback_limit:
-                del sb[:-self._scrollback_limit]
+                del sb[: -self._scrollback_limit]
             if (self.bridge.current_channel() or "") == comp:
                 self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
             else:
@@ -3234,13 +3494,38 @@ class MainWindow(QMainWindow):
         # Fire and forget: async slot will run under qasync loop
         try:
             import random
+
             nick = f"DeadRabbit{random.randint(1000, 9999)}"
-            self._schedule_async(self.bridge.connectHost, "irc.libera.chat", 6697, True, nick, "deadhop", "DeadHop", channels, None, None, False)
+            self._schedule_async(
+                self.bridge.connectHost,
+                "irc.libera.chat",
+                6697,
+                True,
+                nick,
+                "deadhop",
+                "DeadHop",
+                channels,
+                None,
+                None,
+                False,
+            )
         except Exception:
             try:
                 import random
+
                 nick = f"DeadRabbit{random.randint(1000, 9999)}"
-                self.bridge.connectHost("irc.anonops.com", 6697, True, nick, "deadhop", "DeadHop", channels, None, None, False)
+                self.bridge.connectHost(
+                    "irc.anonops.com",
+                    6697,
+                    True,
+                    nick,
+                    "deadhop",
+                    "DeadHop",
+                    channels,
+                    None,
+                    None,
+                    False,
+                )
             except Exception:
                 pass
 
@@ -3249,7 +3534,19 @@ class MainWindow(QMainWindow):
         if dlg.exec() == dlg.DialogCode.Accepted:
             vals = dlg.values()
             # Unpack new signature with remember/autoconnect
-            host, port, tls, nick, user, realname, chans, password, sasl_user, remember, autoconnect = vals
+            (
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                chans,
+                password,
+                sasl_user,
+                remember,
+                autoconnect,
+            ) = vals
             # Harden: normalize host before resolving policy
             host = self._normalize_host(host)
             host, port, tls = self._resolve_connect_policy(host, port, tls)
@@ -3257,22 +3554,65 @@ class MainWindow(QMainWindow):
                 nick = self._default_nick()
             # Persist if requested
             if remember:
-                self._save_server_settings(host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user)
+                self._save_server_settings(
+                    host,
+                    port,
+                    tls,
+                    nick,
+                    user,
+                    realname,
+                    chans,
+                    bool(autoconnect),
+                    password,
+                    sasl_user,
+                )
                 # Also save into multi-server store with a name
-                name, ok = QInputDialog.getText(self, "Save Server", "Enter a name for this server:", text=f"{host}:{port}")
+                name, ok = QInputDialog.getText(
+                    self, "Save Server", "Enter a name for this server:", text=f"{host}:{port}"
+                )
                 if ok and name.strip():
-                    self._servers_save(name.strip(), host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user)
+                    self._servers_save(
+                        name.strip(),
+                        host,
+                        port,
+                        tls,
+                        nick,
+                        user,
+                        realname,
+                        chans,
+                        bool(autoconnect),
+                        password,
+                        sasl_user,
+                    )
             # Fire and forget: async slot
             try:
-                self._schedule_async(self.bridge.connectHost, host, port, tls, nick, user, realname, chans, password, sasl_user, False)
+                self._schedule_async(
+                    self.bridge.connectHost,
+                    host,
+                    port,
+                    tls,
+                    nick,
+                    user,
+                    realname,
+                    chans,
+                    password,
+                    sasl_user,
+                    False,
+                )
                 if getattr(self, "_auto_negotiate", True):
-                    self._schedule_async(self._negotiate_on_connect, host, nick, user, password, sasl_user)
+                    self._schedule_async(
+                        self._negotiate_on_connect, host, nick, user, password, sasl_user
+                    )
             except Exception:
                 # Fallback: direct call if bridge is sync in this build
                 try:
-                    self.bridge.connectHost(host, port, tls, nick, user, realname, chans, password, sasl_user, False)
+                    self.bridge.connectHost(
+                        host, port, tls, nick, user, realname, chans, password, sasl_user, False
+                    )
                     if getattr(self, "_auto_negotiate", True):
-                        self._schedule_async(self._negotiate_on_connect, host, nick, user, password, sasl_user)
+                        self._schedule_async(
+                            self._negotiate_on_connect, host, nick, user, password, sasl_user
+                        )
                 except Exception:
                     pass
             self.status.showMessage(f"Connecting to {host}:{port}…", 2000)
@@ -3311,7 +3651,7 @@ class MainWindow(QMainWindow):
             # Strip schemes
             for pref in ("irc://", "ircs://", "http://", "https://"):
                 if h.startswith(pref):
-                    h = h[len(pref):]
+                    h = h[len(pref) :]
                     break
             # Remove path part if present
             if "/" in h:
@@ -3329,8 +3669,14 @@ class MainWindow(QMainWindow):
         except Exception:
             return host or ""
 
-    def _negotiate_on_connect(self, host: str, nick: str | None, user: str | None,
-                               password: str | None, sasl_user: str | None) -> None:
+    def _negotiate_on_connect(
+        self,
+        host: str,
+        nick: str | None,
+        user: str | None,
+        password: str | None,
+        sasl_user: str | None,
+    ) -> None:
         """Minimal IRCv3 CAP and optional SASL negotiation.
 
         Best-effort via raw commands; safe to call even if server ignores.
@@ -3338,40 +3684,48 @@ class MainWindow(QMainWindow):
         try:
             # Initialize negotiation state
             self._cap_state = {
-                'host': host,
-                'ls': set(),
-                'ack': set(),
-                'nak': set(),
-                'pending': set(),
-                'sasl_requested': False,
-                'sasl_in_progress': False,
-                'sasl_done': False,
-                'end_sent': False,
-                'using_tls': False,
+                "host": host,
+                "ls": set(),
+                "ack": set(),
+                "nak": set(),
+                "pending": set(),
+                "sasl_requested": False,
+                "sasl_in_progress": False,
+                "sasl_done": False,
+                "end_sent": False,
+                "using_tls": False,
             }
             # Try to infer TLS in use from last connect params if available
             try:
-                self._cap_state['using_tls'] = True if getattr(self, '_last_connect_tls', False) else False
+                self._cap_state["using_tls"] = (
+                    True if getattr(self, "_last_connect_tls", False) else False
+                )
             except Exception:
                 pass
             # Save last creds for SASL
-            self._cap_state['nick'] = nick or ''
-            self._cap_state['sasl_user'] = sasl_user or nick or ''
-            self._cap_state['password'] = password or ''
+            self._cap_state["nick"] = nick or ""
+            self._cap_state["sasl_user"] = sasl_user or nick or ""
+            self._cap_state["password"] = password or ""
 
             # Desired capabilities (request intersection after LS)
             want = {
-                "server-time", "message-tags", "echo-message",
-                "chghost", "away-notify", "account-notify", "multi-prefix",
-                "userhost-in-names", "labeled-response"
+                "server-time",
+                "message-tags",
+                "echo-message",
+                "chghost",
+                "away-notify",
+                "account-notify",
+                "multi-prefix",
+                "userhost-in-names",
+                "labeled-response",
             }
-            if (password or sasl_user):
+            if password or sasl_user:
                 want.add("sasl")
             # STARTTLS preference: note it, but actual upgrade likely requires bridge support
-            if bool(getattr(self, '_try_starttls', False)) and not self._cap_state['using_tls']:
+            if bool(getattr(self, "_try_starttls", False)) and not self._cap_state["using_tls"]:
                 # Only mark interest; do not request here unless we can upgrade
                 want.add("starttls")
-            self._cap_state['want'] = set(want)
+            self._cap_state["want"] = set(want)
 
             # Begin: request LS; other requests will be sent when LS arrives and we can intersect with available
             self._send_raw("CAP LS 302")
@@ -3389,89 +3743,105 @@ class MainWindow(QMainWindow):
         # Quick checks to avoid overhead
         if " CAP " not in line and not any(t in line for t in (" AUTHENTICATE ", " 90", " 00")):
             return
-        st = getattr(self, '_cap_state', None)
+        st = getattr(self, "_cap_state", None)
         if st is None:
             return
         try:
             # CAP LS
             if " CAP " in line and " LS " in line:
                 # Parse caps after ':'
-                caps_part = line.split(':', 1)[1] if ':' in line else ''
-                avail = set([c.split('=')[0] for c in caps_part.strip().split() if c])
-                st['ls'] |= avail
+                caps_part = line.split(":", 1)[1] if ":" in line else ""
+                avail = set([c.split("=")[0] for c in caps_part.strip().split() if c])
+                st["ls"] |= avail
                 # Compute intersection and send CAP REQ for what's wanted
-                req = (st.get('want') or set()) & st['ls']
+                req = (st.get("want") or set()) & st["ls"]
                 if req:
-                    st['pending'] |= req
+                    st["pending"] |= req
                     self._send_raw("CAP REQ :" + " ".join(sorted(req)))
                 else:
                     # No caps to request; we can end if not doing SASL
-                    if not st.get('sasl_requested'):
+                    if not st.get("sasl_requested"):
                         self._send_raw("CAP END")
-                        st['end_sent'] = True
+                        st["end_sent"] = True
                 return
 
             # CAP ACK
             if " CAP " in line and " ACK " in line:
-                caps_part = line.split(':', 1)[1] if ':' in line else ''
-                acks = set([c.split('=')[0] for c in caps_part.strip().split() if c])
-                st['ack'] |= acks
-                st['pending'] -= acks
+                caps_part = line.split(":", 1)[1] if ":" in line else ""
+                acks = set([c.split("=")[0] for c in caps_part.strip().split() if c])
+                st["ack"] |= acks
+                st["pending"] -= acks
                 # SASL start once ACK'd
-                if 'sasl' in acks and not st['sasl_in_progress'] and (st.get('password') or st.get('sasl_user')):
-                    st['sasl_requested'] = True
-                    st['sasl_in_progress'] = True
+                if (
+                    "sasl" in acks
+                    and not st["sasl_in_progress"]
+                    and (st.get("password") or st.get("sasl_user"))
+                ):
+                    st["sasl_requested"] = True
+                    st["sasl_in_progress"] = True
                     self._send_raw("AUTHENTICATE PLAIN")
                 # STARTTLS path (note: likely unsupported without bridge socket upgrade)
-                if 'starttls' in acks and not st['using_tls'] and bool(getattr(self, '_try_starttls', False)):
-                    self.status.showMessage("Server supports STARTTLS; upgrade not attempted (bridge support required)", 4000)
+                if (
+                    "starttls" in acks
+                    and not st["using_tls"]
+                    and bool(getattr(self, "_try_starttls", False))
+                ):
+                    self.status.showMessage(
+                        "Server supports STARTTLS; upgrade not attempted (bridge support required)",
+                        4000,
+                    )
                 # If no pending and no SASL to perform, end
-                if not st['pending'] and not st['sasl_in_progress'] and not st['end_sent']:
+                if not st["pending"] and not st["sasl_in_progress"] and not st["end_sent"]:
                     self._send_raw("CAP END")
-                    st['end_sent'] = True
+                    st["end_sent"] = True
                     self._persist_caps_ack()
                 return
 
             # CAP NAK
             if " CAP " in line and " NAK " in line:
-                caps_part = line.split(':', 1)[1] if ':' in line else ''
-                naks = set([c.split('=')[0] for c in caps_part.strip().split() if c])
-                st['nak'] |= naks
-                st['pending'] -= naks
+                caps_part = line.split(":", 1)[1] if ":" in line else ""
+                naks = set([c.split("=")[0] for c in caps_part.strip().split() if c])
+                st["nak"] |= naks
+                st["pending"] -= naks
                 # If no more pending and no SASL active, end
-                if not st['pending'] and not st['sasl_in_progress'] and not st['end_sent']:
+                if not st["pending"] and not st["sasl_in_progress"] and not st["end_sent"]:
                     self._send_raw("CAP END")
-                    st['end_sent'] = True
+                    st["end_sent"] = True
                 return
 
             # AUTHENTICATE + (server ready for payload)
-            if line.endswith(" AUTHENTICATE +") and st.get('sasl_in_progress'):
+            if line.endswith(" AUTHENTICATE +") and st.get("sasl_in_progress"):
                 import base64
-                u = st.get('sasl_user') or st.get('nick') or ''
-                p = st.get('password') or ''
+
+                u = st.get("sasl_user") or st.get("nick") or ""
+                p = st.get("password") or ""
                 mech = base64.b64encode((u + "\0" + u + "\0" + p).encode("utf-8")).decode("ascii")
                 self._send_raw("AUTHENTICATE " + mech)
                 return
 
             # SASL numerics handling
             # Success: 900 (logged in), 903 (SASL success)
-            if any(code in line.split()[:2] for code in ("900", "903")) and st.get('sasl_in_progress'):
-                st['sasl_in_progress'] = False
-                st['sasl_done'] = True
-                if not st['end_sent']:
+            if any(code in line.split()[:2] for code in ("900", "903")) and st.get(
+                "sasl_in_progress"
+            ):
+                st["sasl_in_progress"] = False
+                st["sasl_done"] = True
+                if not st["end_sent"]:
                     self._send_raw("CAP END")
-                    st['end_sent'] = True
+                    st["end_sent"] = True
                     self._persist_caps_ack()
                 self.status.showMessage("SASL authentication successful", 3000)
                 return
 
             # Failures: 902 not logged in; 904-908 errors depending on server
-            if any(code in line.split()[:2] for code in ("902", "904", "905", "906", "907", "908")) and st.get('sasl_in_progress'):
-                st['sasl_in_progress'] = False
-                st['sasl_done'] = False
-                if not st['end_sent']:
+            if any(
+                code in line.split()[:2] for code in ("902", "904", "905", "906", "907", "908")
+            ) and st.get("sasl_in_progress"):
+                st["sasl_in_progress"] = False
+                st["sasl_done"] = False
+                if not st["end_sent"]:
                     self._send_raw("CAP END")
-                    st['end_sent'] = True
+                    st["end_sent"] = True
                     self._persist_caps_ack()
                 self.status.showMessage("SASL authentication failed", 4000)
                 return
@@ -3483,11 +3853,11 @@ class MainWindow(QMainWindow):
         Stores both a legacy key and a namespaced key by host for multi-server usage.
         """
         try:
-            st = getattr(self, '_cap_state', None)
+            st = getattr(self, "_cap_state", None)
             if not st:
                 return
-            ack = sorted(st.get('ack') or [])
-            host = st.get('host') or ''
+            ack = sorted(st.get("ack") or [])
+            host = st.get("host") or ""
             s = QSettings("DeadHop", "DeadHopClient")
             # Legacy
             s.setValue("server/capabilities_enabled", ack)
@@ -3505,9 +3875,21 @@ class MainWindow(QMainWindow):
         except Exception:
             return []
 
-    def _servers_save(self, name: str, host: str, port: int, tls: bool, nick: str, user: str, realname: str,
-                      channels: list[str], autoconnect: bool, password: str | None, sasl_user: str | None,
-                      ignore_invalid_certs: bool = False) -> None:
+    def _servers_save(
+        self,
+        name: str,
+        host: str,
+        port: int,
+        tls: bool,
+        nick: str,
+        user: str,
+        realname: str,
+        channels: list[str],
+        autoconnect: bool,
+        password: str | None,
+        sasl_user: str | None,
+        ignore_invalid_certs: bool = False,
+    ) -> None:
         try:
             s = QSettings("DeadHop", "DeadHopClient")
             names = set(self._servers_list())
@@ -3547,7 +3929,19 @@ class MainWindow(QMainWindow):
             sasl_user = s.value(base + "/sasl_user", None, type=str)
             autoconnect = s.value(base + "/autoconnect", False, type=bool)
             ignore_invalid_certs = s.value(base + "/ignore_invalid_certs", False, type=bool)
-            return host, int(port), bool(tls), nick, user or "deadhop", realname or "DeadHop", list(channels), password, sasl_user, bool(autoconnect), bool(ignore_invalid_certs)
+            return (
+                host,
+                int(port),
+                bool(tls),
+                nick,
+                user or "deadhop",
+                realname or "DeadHop",
+                list(channels),
+                password,
+                sasl_user,
+                bool(autoconnect),
+                bool(ignore_invalid_certs),
+            )
         except Exception:
             return None
 
@@ -3557,7 +3951,19 @@ class MainWindow(QMainWindow):
             names = [n for n in self._servers_list() if n != name]
             s.setValue("servers/names", names)
             base = f"servers/{name}"
-            for key in ("host","port","tls","nick","user","realname","channels","password","sasl_user","autoconnect","ignore_invalid_certs"):
+            for key in (
+                "host",
+                "port",
+                "tls",
+                "nick",
+                "user",
+                "realname",
+                "channels",
+                "password",
+                "sasl_user",
+                "autoconnect",
+                "ignore_invalid_certs",
+            ):
                 s.remove(base + "/" + key)
         except Exception:
             pass
@@ -3577,9 +3983,33 @@ class MainWindow(QMainWindow):
             for n in self._servers_list():
                 data = self._servers_load(n)
                 if data and data[-2] is True:
-                    host, port, tls, nick, user, realname, channels, password, sasl_user, _auto, ignore = data
+                    (
+                        host,
+                        port,
+                        tls,
+                        nick,
+                        user,
+                        realname,
+                        channels,
+                        password,
+                        sasl_user,
+                        _auto,
+                        ignore,
+                    ) = data
                     # Include name so we can update its channels later
-                    return n, host, port, tls, nick, user, realname, channels, password, sasl_user, ignore
+                    return (
+                        n,
+                        host,
+                        port,
+                        tls,
+                        nick,
+                        user,
+                        realname,
+                        channels,
+                        password,
+                        sasl_user,
+                        ignore,
+                    )
         except Exception:
             pass
         return None
@@ -3620,9 +4050,22 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         try:
-            self._schedule_async(self.bridge.connectHost, host, port, tls, nick, user, realname, chans, password, sasl_user)
+            self._schedule_async(
+                self.bridge.connectHost,
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                chans,
+                password,
+                sasl_user,
+            )
             if getattr(self, "_auto_negotiate", True):
-                self._schedule_async(self._negotiate_on_connect, host, nick, user, password, sasl_user)
+                self._schedule_async(
+                    self._negotiate_on_connect, host, nick, user, password, sasl_user
+                )
             self.status.showMessage(f"Connecting to {host}:{port}…", 2000)
             self._my_nick = nick
         except Exception:
@@ -3632,10 +4075,35 @@ class MainWindow(QMainWindow):
         dlg = ConnectDialog(self)
         if dlg.exec() == dlg.DialogCode.Accepted:
             vals = dlg.values()
-            host, port, tls, nick, user, realname, chans, password, sasl_user, remember, autoconnect = vals
+            (
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                chans,
+                password,
+                sasl_user,
+                remember,
+                autoconnect,
+            ) = vals
             name, ok = QInputDialog.getText(self, "Add Server", "Name:", text=f"{host}:{port}")
             if ok and name.strip():
-                self._servers_save(name.strip(), host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user, False)
+                self._servers_save(
+                    name.strip(),
+                    host,
+                    port,
+                    tls,
+                    nick,
+                    user,
+                    realname,
+                    chans,
+                    bool(autoconnect),
+                    password,
+                    sasl_user,
+                    False,
+                )
 
     def _servers_edit(self) -> None:
         names = self._servers_list()
@@ -3649,17 +4117,46 @@ class MainWindow(QMainWindow):
         if not data:
             self.toast_host.show_toast("Server not found")
             return
-        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, ignore = data
+        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, ignore = (
+            data
+        )
         dlg = ConnectDialog(self)
         # Pre-fill via dialog setters if available; otherwise rely on internal defaults
         try:
-            dlg.set_values(host, port, tls, nick, user, realname, chans, password, sasl_user, True, autoconnect)
+            dlg.set_values(
+                host, port, tls, nick, user, realname, chans, password, sasl_user, True, autoconnect
+            )
         except Exception:
             pass
         if dlg.exec() == dlg.DialogCode.Accepted:
             vals = dlg.values()
-            host, port, tls, nick, user, realname, chans, password, sasl_user, remember, autoconnect = vals
-            self._servers_save(name, host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user, bool(ignore))
+            (
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                chans,
+                password,
+                sasl_user,
+                remember,
+                autoconnect,
+            ) = vals
+            self._servers_save(
+                name,
+                host,
+                port,
+                tls,
+                nick,
+                user,
+                realname,
+                chans,
+                bool(autoconnect),
+                password,
+                sasl_user,
+                bool(ignore),
+            )
 
     def _servers_set_ignore_invalid_certs(self) -> None:
         names = self._servers_list()
@@ -3670,15 +4167,32 @@ class MainWindow(QMainWindow):
         if not ok or not name:
             return
         # Ask desired state
-        state, ok2 = QInputDialog.getItem(self, "Ignore Invalid Certs", "Set to:", ["Yes", "No"], 0, False)
+        state, ok2 = QInputDialog.getItem(
+            self, "Ignore Invalid Certs", "Set to:", ["Yes", "No"], 0, False
+        )
         if not ok2:
             return
-        val = (state == "Yes")
+        val = state == "Yes"
         data = self._servers_load(name)
         if not data:
             return
-        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, _ignore = data
-        self._servers_save(name, host, port, tls, nick, user, realname, chans, bool(autoconnect), password, sasl_user, val)
+        host, port, tls, nick, user, realname, chans, password, sasl_user, autoconnect, _ignore = (
+            data
+        )
+        self._servers_save(
+            name,
+            host,
+            port,
+            tls,
+            nick,
+            user,
+            realname,
+            chans,
+            bool(autoconnect),
+            password,
+            sasl_user,
+            val,
+        )
 
     def _apply_tls_ignore_setting(self, ignore: bool) -> None:
         try:
@@ -3717,7 +4231,14 @@ class MainWindow(QMainWindow):
                     break
         except Exception:
             pass
-        name, ok = QInputDialog.getItem(self, "Set Auto-connect", "Choose:", names, names.index(current) if current in names else 0, False)
+        name, ok = QInputDialog.getItem(
+            self,
+            "Set Auto-connect",
+            "Choose:",
+            names,
+            names.index(current) if current in names else 0,
+            False,
+        )
         if ok and name:
             self._servers_set_autoconnect_name(name)
 
@@ -3725,7 +4246,9 @@ class MainWindow(QMainWindow):
         """Populate the sidebar with channels received from the bridge and select the first."""
         try:
             # Preserve existing PM entries, then merge with incoming channels
-            preserve = [lbl for lbl in getattr(self, "_channel_labels", []) if str(lbl).startswith("[PM:")]
+            preserve = [
+                lbl for lbl in getattr(self, "_channel_labels", []) if str(lbl).startswith("[PM:")
+            ]
             new_labels = list(channels or [])
             for lbl in preserve:
                 if lbl not in new_labels:
@@ -3750,6 +4273,7 @@ class MainWindow(QMainWindow):
                 # Bridge emits composite labels like "net:#chan". We shouldn't persist those.
                 cur = self.bridge.current_channel() or ""
                 cur_net = cur.split(":", 1)[0] if (":" in cur and not cur.startswith("[")) else None
+
                 def _to_plain(lst: list[str]) -> list[str]:
                     plain: list[str] = []
                     for lbl in lst or []:
@@ -3763,10 +4287,11 @@ class MainWindow(QMainWindow):
                                 continue
                             lbl = ch
                         # At this point lbl should be a raw channel like #chan
-                        if lbl and (lbl.startswith('#') or lbl.startswith('&')):
+                        if lbl and (lbl.startswith("#") or lbl.startswith("&")):
                             if lbl not in plain:
                                 plain.append(lbl)
                     return plain
+
                 plain_channels = _to_plain(list(channels or []))
                 # Save to legacy single-server store
                 s.setValue("server/channels", plain_channels)
@@ -3796,14 +4321,16 @@ class MainWindow(QMainWindow):
                     pass
                 # Best-effort: select channel in sidebar if API exists
                 try:
-                    sel = getattr(self.sidebar, 'select_channel', None)
+                    sel = getattr(self.sidebar, "select_channel", None)
                     if callable(sel):
                         sel(ch)
                 except Exception:
                     pass
                 # Clear chat view and replay scrollback for the selected label (channel or server)
                 try:
-                    self.chat.page().runJavaScript("(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();")
+                    self.chat.page().runJavaScript(
+                        "(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();"
+                    )
                 except Exception:
                     pass
                 try:
@@ -3824,7 +4351,9 @@ class MainWindow(QMainWindow):
     # ----- AI integration -----
     def _start_ai_chat(self) -> None:
         # Ask for model name (only requirement)
-        model, ok = QInputDialog.getText(self, "AI Model", "Enter Ollama model name:", text="llama3")
+        model, ok = QInputDialog.getText(
+            self, "AI Model", "Enter Ollama model name:", text="llama3"
+        )
         if not ok or not model.strip():
             return
         if not is_server_up():
@@ -3854,7 +4383,11 @@ class MainWindow(QMainWindow):
 
     def _run_ai_inference(self, ai_channel: str, prompt: str) -> None:
         # Extract model name from channel label [AI:model]
-        model = ai_channel[4:-1] if ai_channel.startswith("[AI:") and ai_channel.endswith("]") else ai_channel
+        model = (
+            ai_channel[4:-1]
+            if ai_channel.startswith("[AI:") and ai_channel.endswith("]")
+            else ai_channel
+        )
         # Stop previous worker if any
         if hasattr(self, "_ai_thread") and self._ai_thread is not None:
             try:
@@ -3892,7 +4425,7 @@ class MainWindow(QMainWindow):
         if self._ai_route_target:
             self._ai_accum += text
             # Flush heuristics: newline, sentence end, or buffer too large
-            if ("\n" in text) or text.endswith(('. ', '! ', '? ')) or len(self._ai_accum) >= 320:
+            if ("\n" in text) or text.endswith((". ", "! ", "? ")) or len(self._ai_accum) >= 320:
                 self._flush_ai_route_buffer()
 
     def _ai_done(self) -> None:
@@ -3916,7 +4449,14 @@ class MainWindow(QMainWindow):
         current = self.bridge.current_channel() or ""
         if current not in options:
             current = options[0]
-        item, ok = QInputDialog.getItem(self, "Route AI Output", "Choose target channel:", options, options.index(current) if current in options else 0, False)
+        item, ok = QInputDialog.getItem(
+            self,
+            "Route AI Output",
+            "Choose target channel:",
+            options,
+            options.index(current) if current in options else 0,
+            False,
+        )
         if ok and item:
             self._ai_route_target = item
             try:
@@ -3951,7 +4491,7 @@ class MainWindow(QMainWindow):
             if len(s) <= limit:
                 parts.append(s)
                 break
-            cut = s.rfind(' ', 0, limit)
+            cut = s.rfind(" ", 0, limit)
             if cut == -1:
                 cut = limit
             parts.append(s[:cut])

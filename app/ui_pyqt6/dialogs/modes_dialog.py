@@ -1,5 +1,7 @@
 from __future__ import annotations
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLineEdit, QLabel, QDialogButtonBox
+
+from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QLineEdit, QVBoxLayout
+
 
 class ModesDialog(QDialog):
     def __init__(self, channel: str, parent=None) -> None:
@@ -11,7 +13,9 @@ class ModesDialog(QDialog):
         self.edit = QLineEdit(self)
         self.edit.setPlaceholderText("+nt")
         v.addWidget(self.edit)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, parent=self)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, parent=self
+        )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         v.addWidget(btns)

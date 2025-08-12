@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QDockWidget
-from PyQt6.QtGui import QIcon
-from PyQt6.QtGui import QDesktopServices
 from pathlib import Path
 from typing import Any
+
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QDesktopServices, QIcon
+from PyQt6.QtWidgets import QDockWidget, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 # Reuse the icon helper via relative import if available
 try:
     from ..main_window import get_icon  # type: ignore
 except Exception:
+
     def get_icon(names, awesome_fallback=None) -> QIcon:
         return QIcon()
 
@@ -22,13 +23,15 @@ class BrowserDock(QDockWidget):
         super().__init__("Browser", parent)
         self.setObjectName("BrowserDock")
         # Lazy import WebEngine modules now that a Q(Core)Application should exist
-        from PyQt6.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile  # type: ignore
+        from PyQt6.QtWebEngineWidgets import QWebEngineProfile, QWebEngineView  # type: ignore
 
         # Persistent profile under app/resources/qtweb/profile
         base = Path(__file__).resolve().parents[2] / "resources" / "qtweb" / storage_name
         base.mkdir(parents=True, exist_ok=True)
         self.profile = QWebEngineProfile(str(base))
-        self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+        self.profile.setPersistentCookiesPolicy(
+            QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
+        )
         self.profile.setHttpUserAgent(self.profile.httpUserAgent() + " DeadHopClient/1.0")
 
         self.view = QWebEngineView(self)
@@ -50,7 +53,9 @@ class BrowserDock(QDockWidget):
         self.btn_back.setIcon(get_icon(["back", "arrow-left"], awesome_fallback="fa5s.arrow-left"))
         self.btn_back.clicked.connect(self.view.back)
         self.btn_forward = QPushButton()
-        self.btn_forward.setIcon(get_icon(["forward", "arrow-right"], awesome_fallback="fa5s.arrow-right"))
+        self.btn_forward.setIcon(
+            get_icon(["forward", "arrow-right"], awesome_fallback="fa5s.arrow-right")
+        )
         self.btn_forward.clicked.connect(self.view.forward)
         self.btn_reload = QPushButton()
         self.btn_reload.setIcon(get_icon(["reload", "refresh"], awesome_fallback="fa5s.sync"))
@@ -59,7 +64,9 @@ class BrowserDock(QDockWidget):
         self.btn_home.setIcon(get_icon(["home"], awesome_fallback="fa5s.home"))
         self.btn_home.clicked.connect(self._go_home)
         self.btn_ext = QPushButton()
-        self.btn_ext.setIcon(get_icon(["external", "open"], awesome_fallback="fa5s.external-link-alt"))
+        self.btn_ext.setIcon(
+            get_icon(["external", "open"], awesome_fallback="fa5s.external-link-alt")
+        )
         self.btn_ext.clicked.connect(self._open_external)
 
         self.url_edit = QLineEdit()
@@ -132,10 +139,11 @@ class BrowserDock(QDockWidget):
             return 0
         total = 0
         # Import core module lazily here as well
-        from PyQt6.QtWebEngineCore import QWebEngineCookieStore  # type: ignore
         store: Any = self.profile.cookieStore()
+
         def add_cookie(c):
             from PyQt6.QtNetwork import QNetworkCookie
+
             try:
                 qc = QNetworkCookie()
                 qc.setName(c.name.encode())
@@ -147,6 +155,7 @@ class BrowserDock(QDockWidget):
                 return True
             except Exception:
                 return False
+
         try:
             for getter in (browser_cookie3.chrome, browser_cookie3.edge, browser_cookie3.firefox):
                 try:

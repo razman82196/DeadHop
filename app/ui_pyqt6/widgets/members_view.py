@@ -1,12 +1,15 @@
 from __future__ import annotations
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QLabel, QMenu
-from PyQt6.QtCore import pyqtSignal, Qt
-from PyQt6.QtGui import QColor, QBrush, QFont
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QFont
+from PyQt6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QMenu, QVBoxLayout, QWidget
+
 from .avatars import make_avatar_icon
 
 
 class MembersView(QWidget):
     memberAction = pyqtSignal(str, str)  # (nick, action)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         lay = QVBoxLayout(self)
@@ -53,9 +56,9 @@ class MembersView(QWidget):
             for i in range(self.list.count()):
                 it = self.list.item(i)
                 raw = it.text()
-                status = ''
+                status = ""
                 name = raw
-                if name and name[0] in ('~','&','@','%','+'):
+                if name and name[0] in ("~", "&", "@", "%", "+"):
                     status = name[0]
                     name = name[1:].strip()
                 path = self._avatars.get(name)
@@ -70,9 +73,9 @@ class MembersView(QWidget):
             for i in range(self.list.count()):
                 it = self.list.item(i)
                 raw = it.text()
-                status = ''
+                status = ""
                 name = raw
-                if name and name[0] in ('~','&','@','%','+'):
+                if name and name[0] in ("~", "&", "@", "%", "+"):
                     status = name[0]
                     name = name[1:].strip()
                 path = self._avatars.get(name)
@@ -83,24 +86,26 @@ class MembersView(QWidget):
     def set_members(self, names: list[str]) -> None:
         """Replace the members list with the provided names."""
         self.list.clear()
+
         # Sort by IRC status prefix
         def weight(n: str) -> int:
             if not n:
                 return 99
             c = n[0]
-            order = {'~': 0, '&': 1, '@': 2, '%': 3, '+': 4}
+            order = {"~": 0, "&": 1, "@": 2, "%": 3, "+": 4}
             return order.get(c, 9)
+
         for raw in sorted(names or [], key=lambda x: (weight(x), x.lower())):
             name = raw
             # status prefix
-            status = ''
-            if name and name[0] in ('~','&','@','%','+'):
+            status = ""
+            if name and name[0] in ("~", "&", "@", "%", "+"):
                 status = name[0]
                 name = name[1:]
             it = QListWidgetItem(f"{status} {name}" if status else name)
             # Font weight for status
             f = QFont()
-            if status in ('~','&','@'):
+            if status in ("~", "&", "@"):
                 f.setBold(True)
             it.setFont(f)
             # Deterministic color per nick
@@ -115,7 +120,7 @@ class MembersView(QWidget):
 
     def _nick_qcolor(self, nick: str) -> QColor:
         try:
-            s = (nick or '').lower().encode('utf-8')
+            s = (nick or "").lower().encode("utf-8")
             h = 0
             for b in s:
                 h = (h * 131 + int(b)) & 0xFFFFFFFF
@@ -123,10 +128,11 @@ class MembersView(QWidget):
             # Convert HSL to RGB for QColor
             # Use medium saturation/lightness for readability
             import colorsys
-            r, g, b = colorsys.hls_to_rgb(hue/360.0, 0.60, 0.65)
-            return QColor(int(r*255), int(g*255), int(b*255))
+
+            r, g, b = colorsys.hls_to_rgb(hue / 360.0, 0.60, 0.65)
+            return QColor(int(r * 255), int(g * 255), int(b * 255))
         except Exception:
-            return QColor('#82b1ff')
+            return QColor("#82b1ff")
 
     def _open_menu(self, pos) -> None:
         item = self.list.itemAt(pos)

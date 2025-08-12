@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QTreeWidget, QTreeWidgetItem, QMenu
-from PyQt6.QtGui import QColor, QBrush, QFont
+from PyQt6.QtGui import QBrush, QColor, QFont
+from PyQt6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
+
 
 class SidebarTree(QTreeWidget):
     channelSelected = pyqtSignal(str)
@@ -108,7 +110,7 @@ class SidebarTree(QTreeWidget):
             return
         label = it.text(0).split("  (", 1)[0]
         if count > 0:
-            label += f"  ({count}{'!' if highlight>0 else ''})"
+            label += f"  ({count}{'!' if highlight > 0 else ''})"
         it.setText(0, label)
 
     def _on_click(self, item: QTreeWidgetItem, _col: int) -> None:
@@ -150,16 +152,17 @@ class SidebarTree(QTreeWidget):
 
 def _hash_qcolor(key: str) -> QColor:
     try:
-        s = (key or '').lower().encode('utf-8')
+        s = (key or "").lower().encode("utf-8")
         h = 0
         for b in s:
             h = (h * 131 + int(b)) & 0xFFFFFFFF
         hue = h % 360
         import colorsys
-        r, g, b = colorsys.hls_to_rgb(hue/360.0, 0.58, 0.62)
-        return QColor(int(r*255), int(g*255), int(b*255))
+
+        r, g, b = colorsys.hls_to_rgb(hue / 360.0, 0.58, 0.62)
+        return QColor(int(r * 255), int(g * 255), int(b * 255))
     except Exception:
-        return QColor('#a78bfa')
+        return QColor("#a78bfa")
 
     def _on_click(self, item: QTreeWidgetItem, _col: int) -> None:
         # Top-level: network selected

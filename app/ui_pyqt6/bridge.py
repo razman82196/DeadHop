@@ -1,8 +1,9 @@
 from __future__ import annotations
-import asyncio
-from typing import Optional, Iterable, Dict, List
 
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot as Slot
+import asyncio
+from collections.abc import Iterable
+
+from PyQt6.QtCore import QObject, pyqtSignal
 from qasync import asyncSlot
 
 from ..irc.manager import IRCManager, ServerProfile
@@ -19,21 +20,21 @@ class BridgeQt(QObject):
     # Typed events from IRCManager (network-aware)
     userJoined = pyqtSignal(str, str)  # composite channel, nick
     userParted = pyqtSignal(str, str)  # composite channel, nick
-    userQuit = pyqtSignal(str, str)    # net, nick
+    userQuit = pyqtSignal(str, str)  # net, nick
     userNickChanged = pyqtSignal(str, str, str)  # net, old, new
     channelTopic = pyqtSignal(str, str, str)  # composite channel, actor, topic
-    channelMode = pyqtSignal(str, str, str)   # composite channel, actor, modes_with_args
+    channelMode = pyqtSignal(str, str, str)  # composite channel, actor, modes_with_args
     channelModeUsers = pyqtSignal(str, list)  # composite channel, [(add, mode, nick)]
 
     def __init__(self):
         super().__init__()
         # Multiple networks keyed by id (use host as id for now)
-        self._ircs: Dict[str, IRCManager] = {}
+        self._ircs: dict[str, IRCManager] = {}
         # Union list of composite labels like 'net:#chan'
-        self._all_channels: List[str] = []
-        self._current_channel: Optional[str] = None
+        self._all_channels: list[str] = []
+        self._current_channel: str | None = None
 
-    def current_channel(self) -> Optional[str]:
+    def current_channel(self) -> str | None:
         return self._current_channel
 
     def set_current_channel(self, ch: str) -> None:
@@ -66,8 +67,8 @@ class BridgeQt(QObject):
                 # If a composite like 'net:#chan' (or worse: '#net:#chan:...'), take the last segment
                 if ":" in ch and not ch.startswith("["):
                     ch = ch.split(":")[-1]
-                if not (ch.startswith('#') or ch.startswith('&')):
-                    ch = '#' + ch
+                if not (ch.startswith("#") or ch.startswith("&")):
+                    ch = "#" + ch
                 norm_channels.append(ch)
         except Exception:
             norm_channels = list(channels or [])
@@ -93,15 +94,23 @@ class BridgeQt(QObject):
             pass
         # Prefix callbacks with network id, and emit composite labels
         irc.on_status = lambda s, _net=net: self.statusChanged.emit(f"[{_net}] {s}")
-        irc.on_message = lambda n, t, x, ts, _net=net: self.messageReceived.emit(n, f"{_net}:{t}", x, ts)
+        irc.on_message = lambda n, t, x, ts, _net=net: self.messageReceived.emit(
+            n, f"{_net}:{t}", x, ts
+        )
         irc.on_names = lambda ch, ns, _net=net: self.namesUpdated.emit(f"{_net}:{ch}", ns)
         irc.on_join = lambda ch, nick, _net=net: self.userJoined.emit(f"{_net}:{ch}", nick)
         irc.on_part = lambda ch, nick, _net=net: self.userParted.emit(f"{_net}:{ch}", nick)
         irc.on_quit = lambda nick, _net=net: self.userQuit.emit(_net, nick)
         irc.on_nick = lambda old, new, _net=net: self.userNickChanged.emit(_net, old, new)
-        irc.on_topic = lambda ch, actor, topic, _net=net: self.channelTopic.emit(f"{_net}:{ch}", actor, topic)
-        irc.on_mode_channel = lambda ch, actor, modes, _net=net: self.channelMode.emit(f"{_net}:{ch}", actor, modes)
-        irc.on_mode_users = lambda ch, changes, _net=net: self.channelModeUsers.emit(f"{_net}:{ch}", changes)
+        irc.on_topic = lambda ch, actor, topic, _net=net: self.channelTopic.emit(
+            f"{_net}:{ch}", actor, topic
+        )
+        irc.on_mode_channel = lambda ch, actor, modes, _net=net: self.channelMode.emit(
+            f"{_net}:{ch}", actor, modes
+        )
+        irc.on_mode_users = lambda ch, changes, _net=net: self.channelModeUsers.emit(
+            f"{_net}:{ch}", changes
+        )
         irc.on_monitor_online = lambda nicks: self.monitorOnline.emit(nicks)
         irc.on_monitor_offline = lambda nicks: self.monitorOffline.emit(nicks)
         try:
@@ -148,7 +157,7 @@ class BridgeQt(QObject):
     async def sendMessageTo(self, composite: str, text: str) -> None:
         if not composite or not text:
             return
-        if composite.startswith('['):
+        if composite.startswith("["):
             return
         net, ch = self._split(composite)
         if not net or not ch:
@@ -171,8 +180,8 @@ class BridgeQt(QObject):
         # Prefer current network inferred from current_channel
         net = None
         cur = self._current_channel or ""
-        if cur and ':' in cur and not cur.startswith('['):
-            net = cur.split(':', 1)[0]
+        if cur and ":" in cur and not cur.startswith("["):
+            net = cur.split(":", 1)[0]
         targets = []
         if net and net in self._ircs:
             targets = [self._ircs[net]]
@@ -200,10 +209,10 @@ class BridgeQt(QObject):
                 self.statusChanged.emit(f"[{net}] Monitor update failed: {e}")
 
     # ----- Channel management (multi-server aware) -----
-    def _split(self, composite: str) -> tuple[Optional[str], Optional[str]]:
-        if not composite or composite.startswith('[') or ':' not in composite:
+    def _split(self, composite: str) -> tuple[str | None, str | None]:
+        if not composite or composite.startswith("[") or ":" not in composite:
             return None, None
-        parts = composite.split(':')
+        parts = composite.split(":")
         # First segment is network id, last segment is the channel
         net = parts[0]
         ch = parts[-1]
@@ -297,12 +306,12 @@ class BridgeQt(QObject):
         # Determine current network from current channel selection
         net = None
         cur = self._current_channel or ""
-        if cur and ':' in cur and not cur.startswith('['):
-            net = cur.split(':', 1)[0]
+        if cur and ":" in cur and not cur.startswith("["):
+            net = cur.split(":", 1)[0]
         if not net or net not in self._ircs:
             return
         irc = self._ircs[net]
-        nick = getattr(irc.p, 'nick', None) or getattr(irc, 'nick', None)
+        nick = getattr(irc.p, "nick", None) or getattr(irc, "nick", None)
         if not nick:
             return
         try:

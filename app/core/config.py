@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -35,6 +36,7 @@ def ensure_config() -> dict:
     with CONFIG_PATH.open("w", encoding="utf-8") as f:
         json.dump(DEFAULT_CFG, f, ensure_ascii=False, indent=2)
     return DEFAULT_CFG
+
 
 def _migrate_legacy_data_dir() -> None:
     """One-time migrate ~/.peachbot_local to ~/.deadhop_local.

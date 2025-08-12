@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import json
-from typing import Iterator, Optional
+from collections.abc import Iterator
+
 import requests
 
 DEFAULT_HOST = "127.0.0.1"
@@ -16,7 +18,13 @@ def is_server_up(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
         return False
 
 
-def stream_generate(model: str, prompt: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, options: Optional[dict] = None) -> Iterator[dict]:
+def stream_generate(
+    model: str,
+    prompt: str,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    options: dict | None = None,
+) -> Iterator[dict]:
     """
     Yields JSON objects from Ollama /api/generate streaming endpoint.
     Each yielded item typically has keys like: {"model", "response", "done", ...}

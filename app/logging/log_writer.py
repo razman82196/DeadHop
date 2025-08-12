@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import os
 import time
 from pathlib import Path
+
 
 class LogWriter:
     def __init__(self, base_dir: str | None = None) -> None:

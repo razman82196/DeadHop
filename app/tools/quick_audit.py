@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import sys
 import time
-from PyQt6.QtWidgets import QApplication
+
 from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication
 
 # Import MainWindow and BridgeQt
 from app.ui_pyqt6.main_window import MainWindow
@@ -48,8 +50,12 @@ def run():
     def step4():
         # Test chat embed formatting for image and YouTube
         try:
-            img_msg = w._format_message_html("tester", "Check this pic https://example.com/pic.jpg", ts=time.time())
-            yt_msg = w._format_message_html("tester", "Watch https://www.youtube.com/watch?v=dQw4w9WgXcQ", ts=time.time())
+            img_msg = w._format_message_html(
+                "tester", "Check this pic https://example.com/pic.jpg", ts=time.time()
+            )
+            yt_msg = w._format_message_html(
+                "tester", "Watch https://www.youtube.com/watch?v=dQw4w9WgXcQ", ts=time.time()
+            )
             print("IMG HTML:", img_msg)
             print("YT  HTML:", yt_msg)
             w._chat_append(img_msg)

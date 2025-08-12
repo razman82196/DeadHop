@@ -21,4 +21,3 @@ qt-material>=2.14
 
 # Optional: import cookies from system browsers
 browser-cookie3>=0.19.1
-

@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
-from PyQt6.QtCore import QUrl, Qt
+from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QSizePolicy,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -28,7 +25,7 @@ class BrowserWindow(QMainWindow):
     - Minimal dark theme via CSS injection script
     """
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("DeadHop – Browser")
         self.resize(1100, 800)
@@ -48,7 +45,9 @@ class BrowserWindow(QMainWindow):
         try:
             self.profile.setCachePath(str(cache))
             self.profile.setPersistentStoragePath(str(storage))
-            self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.NoPersistentCookies)
+            self.profile.setPersistentCookiesPolicy(
+                QWebEngineProfile.PersistentCookiesPolicy.NoPersistentCookies
+            )
         except Exception:
             pass
 
@@ -67,15 +66,17 @@ class BrowserWindow(QMainWindow):
         script.setName("deadhop-dark-css")
         script.setSourceCode(
             """
-            (function(){
-                try {
+            (function(){{
+                try {{
                     let style = document.createElement('style');
                     style.type = 'text/css';
-                    style.innerHTML = `%s`;
+                    style.innerHTML = `{}`;
                     document.documentElement.appendChild(style);
-                } catch (e) {}
-            })();
-            """ % css.replace("\n", " ")
+                }} catch (e) {{}}
+            }})();
+            """.format(
+                css.replace("\n", " ")
+            )
         )
         self.profile.scripts().insert(script)
 
@@ -153,7 +154,7 @@ class BrowserWindow(QMainWindow):
         self.raise_()
 
     # Optional cookie import API compatibility
-    def import_cookies_from_system(self, domain: Optional[str] = None) -> int:
+    def import_cookies_from_system(self, domain: str | None = None) -> int:
         try:
             import browser_cookie3  # type: ignore
         except Exception:

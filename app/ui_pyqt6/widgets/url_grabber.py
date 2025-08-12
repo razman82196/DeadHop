@@ -1,9 +1,18 @@
 from __future__ import annotations
-import re
+
 import asyncio
-from typing import Optional
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QMenu
+import re
+
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 URL_RE = re.compile(r"\bhttps?://[\w\-._~:/?#\[\]@!$&'()*+,;=%]+", re.IGNORECASE)
 
@@ -19,7 +28,7 @@ class URLGrabber(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         v = QVBoxLayout(self)
-        v.setContentsMargins(6,6,6,6)
+        v.setContentsMargins(6, 6, 6, 6)
         v.setSpacing(6)
         self.list = QListWidget(self)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -54,12 +63,16 @@ class URLGrabber(QWidget):
         async with self._sem:
             try:
                 timeout = httpx.Timeout(5.0, connect=5.0, read=5.0) if httpx else None
-                async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers={"User-Agent": "DeadHopClient/1.0"}) as client:
+                async with httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=timeout,
+                    headers={"User-Agent": "DeadHopClient/1.0"},
+                ) as client:
                     r = await client.get(url)
                     if r.status_code >= 400:
                         return
                     soup = BeautifulSoup(r.text, "lxml") if BeautifulSoup else None
-                    title: Optional[str] = None
+                    title: str | None = None
                     if soup is not None:
                         t = soup.find("title")
                         if t and t.text:
@@ -84,14 +97,17 @@ class URLGrabber(QWidget):
         # the URL is after ' — ' if title exists
         url = text.split(" — ")[-1]
         if chosen is act_open:
-            from PyQt6.QtGui import QDesktopServices
             from PyQt6.QtCore import QUrl
+            from PyQt6.QtGui import QDesktopServices
+
             QDesktopServices.openUrl(QUrl(url))
         elif chosen is act_copy:
             from PyQt6.QtWidgets import QApplication
+
             QApplication.clipboard().setText(url)
 
     def _copy(self) -> None:
         from PyQt6.QtWidgets import QApplication
+
         items = [self.list.item(i).text() for i in range(self.list.count())]
         QApplication.clipboard().setText("\n".join(items))
