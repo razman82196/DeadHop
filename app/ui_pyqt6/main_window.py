@@ -252,6 +252,18 @@ class MainWindow(QMainWindow):
         # In-memory scrollback per channel/label -> list[HTML]
         self._scrollback: dict[str, list[str]] = {}
         self._scrollback_limit: int = 1000
+        # Per-network status buffer (server messages rendered when selecting a network)
+        self._status_by_net: dict[str, list[str]] = {}
+        # Track current topic per channel label (e.g. "net:#chan")
+        self._topic_by_channel: dict[str, str] = {}
+        # Track topic metadata per channel: {comp: (setter:str|None, when:int|None)}
+        self._topic_meta_by_channel: dict[str, tuple[str | None, int | None]] = {}
+        # Decoration toggles (read via QSettings primarily; keep local caches safe)
+        # Decorators toggles: per-network and per-channel (channel overrides network)
+        self._decor_net_enabled: dict[str, bool] = {}
+        self._decor_channel_enabled: dict[str, bool] = {}
+        # Channels that should have their scrollback dimmed after a reconnect
+        self._dim_needed_for_channel: set[str] = set()
         # Filesystem location for persisted scrollback
         try:
             from PyQt6.QtCore import QStandardPaths
@@ -404,7 +416,7 @@ class MainWindow(QMainWindow):
 
         # Top toolbar removed per UI simplification
 
-        # Sidebar tree (Network > Channels)
+        # Sidebar tree (Network > Channels) with header
         self.sidebar = SidebarTree()
         self.sidebar.channelSelected.connect(self._on_channel_clicked)
         try:
@@ -417,6 +429,21 @@ class MainWindow(QMainWindow):
             self.sidebar.networkAction.connect(self._on_network_action)
         except Exception:
             pass
+        # Sidebar panel with header label to match Members panel
+        try:
+            self.sidebar_panel = QWidget()
+            sp_v = QVBoxLayout(self.sidebar_panel)
+            sp_v.setContentsMargins(0, 0, 0, 0)
+            sp_v.setSpacing(6)
+            self.sidebar_title = QLabel("Channels")
+            # Style similar to Members title
+            self.sidebar_title.setStyleSheet(
+                "QLabel { font-weight: 700; color: #e6e6e6; padding: 6px 6px 2px 6px; text-shadow: 0 1px 2px rgba(0,0,0,.5); }"
+            )
+            sp_v.addWidget(self.sidebar_title)
+            sp_v.addWidget(self.sidebar, 1)
+        except Exception:
+            self.sidebar_panel = self.sidebar
 
         # Chat view switched to QWebEngineView for rich HTML and inline media
         from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore
@@ -464,7 +491,7 @@ class MainWindow(QMainWindow):
 
         # Splitter layout
         self.split_lr = QSplitter(Qt.Orientation.Horizontal)
-        self.split_lr.addWidget(self.sidebar)
+        self.split_lr.addWidget(self.sidebar_panel)
         self.split_lr.addWidget(self.split_chat)
         self.split_lr.addWidget(self.members)
         self.split_lr.setStretchFactor(0, 0)
@@ -641,6 +668,35 @@ class MainWindow(QMainWindow):
         self._isupport_by_net: dict[str, dict[str, str]] = {}
         # Prefer typed JOIN/PART/etc. events over raw parsing when available
         self._typed_events: bool = True
+        # Topic decorations toggles (persisted)
+        self._decor_net_enabled: dict[str, bool] = {}
+        self._decor_channel_enabled: dict[str, bool] = {}
+        try:
+            s = QSettings("DeadHop", "DeadHopClient")
+            # Load per-network
+            try:
+                s.beginGroup("decorations/net")
+                for k in s.allKeys():
+                    try:
+                        self._decor_net_enabled[k] = bool(s.value(k, False, bool))
+                    except Exception:
+                        pass
+                s.endGroup()
+            except Exception:
+                pass
+            # Load per-channel
+            try:
+                s.beginGroup("decorations/chan")
+                for k in s.allKeys():
+                    try:
+                        self._decor_channel_enabled[k] = bool(s.value(k, False, bool))
+                    except Exception:
+                        pass
+                s.endGroup()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         # Menus
         self._build_menus()
@@ -1394,7 +1450,7 @@ class MainWindow(QMainWindow):
     # ----- Chat WebView helpers -----
     def _init_chat_webview(self) -> None:
         try:
-            base_html = """
+            base_html = r"""
             <!DOCTYPE html>
             <html>
             <head>
@@ -1414,6 +1470,8 @@ class MainWindow(QMainWindow):
                     background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 50%, var(--bg3) 100%);
                     color: var(--fg);
                 }
+                #topic { position: sticky; top: 0; z-index: 5; padding: 10px 14px; background: rgba(0,0,0,.25); border-bottom: 1px solid rgba(255,255,255,.06); font-weight: 600; letter-spacing: .2px; }
+                #topic .label { opacity: .7; margin-right: 6px; font-weight: 500; }
                 #chat { padding: 12px 14px; }
                 a { color: var(--link); text-decoration: none; position: relative; }
                 a:after { content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px; background: linear-gradient(90deg, var(--link), #a78bfa); transform: scaleX(0); transition: transform .25s ease; transform-origin: left; }
@@ -1426,11 +1484,36 @@ class MainWindow(QMainWindow):
                     img[data-msize="small"], iframe[data-msize="small"], video[data-msize="small"] { max-width: 320px; }
                     img[data-msize="medium"], iframe[data-msize="medium"], video[data-msize="medium"] { max-width: 560px; }
                     img[data-msize="large"], iframe[data-msize="large"], video[data-msize="large"] { max-width: 800px; }
-                    .msg { margin: 8px 0; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,0.02); transition: background .2s ease; }
-                    .msg:hover { background: rgba(255,255,255,0.05); }
+                    .msg {
+                        margin: 8px 0;
+                        padding: 8px 10px;
+                        border-radius: 10px;
+                        background: rgba(15, 15, 20, 0.55);
+                        /* Removed backdrop blur to avoid flicker */
+                        border: 1px solid rgba(255,255,255,0.06);
+                        box-shadow: 0 6px 20px rgba(0,0,0,.35);
+                        transition: background .2s ease, box-shadow .2s ease;
+                    }
+                    .msg:hover { background: rgba(15, 15, 20, 0.68); box-shadow: 0 10px 28px rgba(0,0,0,.45); }
                     .ts { color: #8a8a8a; margin-right: 6px; }
                     .nick { font-weight: 700; color: var(--nick); text-shadow: 0 0 8px color-mix(in oklab, var(--nick) 40%, transparent); }
-                    .msg-text { color: #d8d8d8; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+                    :root { --fg: #d8d8d8; --accent: #82b1ff; }
+                    .msg-text {
+                        color: var(--fg, #e2e2e2);
+                        text-shadow:
+                            0 1px 1px rgba(0,0,0,.65),
+                            0 2px 3px rgba(0,0,0,.35);
+                    }
+                    /* Decorations */
+                    #decor { margin-bottom: 8px; }
+                    #decor .banner { max-height: 120px; width: 100%; object-fit: cover; border-radius: 8px; display: block; }
+                    #decor .marquee { overflow: hidden; white-space: nowrap; border-bottom: 1px dashed rgba(255,255,255,.1); padding: 4px 6px; opacity: .85; }
+                    #decor .marquee span { display: inline-block; padding-left: 100%; animation: marquee 14s linear infinite; }
+                    @keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
+                    /* Dimming for scrollback after reconnect */
+                    .msg.dim { opacity: .55; filter: grayscale(100%); }
+                    .msg.dim .nick { color: #a8a8a8 !important; text-shadow: none; }
+                    .msg.dim .msg-text { color: #b8b8b8; text-shadow: none; }
                     /* Simple context menu */
                     #ctx-menu { position: fixed; z-index: 9999; background: #1e1e1e; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; }
                     #ctx-menu button { background: transparent; color: #eee; border: none; padding: 8px 12px; text-align: left; width: 100%; cursor: pointer; border-radius: 6px; }
@@ -1438,7 +1521,8 @@ class MainWindow(QMainWindow):
                 </style>
             </head>
             <body>
-                <div id=\"chat\"></div>
+                <div id="topic"><span class="label">Topic:</span><span id="topic-text"></span></div>
+                <div id="chat"><div id="decor"></div></div>
                 <script>
                 function scrollToBottom() {
                     try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
@@ -1451,6 +1535,121 @@ class MainWindow(QMainWindow):
                         d.innerHTML = html;
                         c.appendChild(d);
                         scrollToBottom();
+                    } catch (e) {}
+                }
+                function setTopic(text, tip) {
+                    try {
+                        const bar = document.getElementById('topic');
+                        const tt = document.getElementById('topic-text');
+                        const t = (text || '').trim();
+                        // Permanent space: always show bar; use placeholder when empty
+                        tt.textContent = t || 'No topic set';
+                        // Keep the topic visible as a tooltip at all times
+                        const tooltip = (tip && String(tip).trim()) || (t || 'No topic set');
+                        bar.title = tooltip;
+                        tt.title = tooltip;
+                    } catch (e) {}
+                }
+                function dimScrollbackAndMark(markerHtml) {
+                    try {
+                        const c = document.getElementById('chat');
+                        const msgs = c.querySelectorAll('.msg');
+                        msgs.forEach(m => m.classList.add('dim'));
+                        if (markerHtml) {
+                            const d = document.createElement('div');
+                            d.className = 'msg';
+                            d.innerHTML = markerHtml;
+                            c.appendChild(d);
+                            scrollToBottom();
+                        }
+                    } catch (e) {}
+                }
+                function applyTopicDecorations(text, enabled) {
+                    try {
+                        const t = (text || '').trim();
+                        const decor = document.getElementById('decor');
+                        if (decor) decor.innerHTML = '';
+                        // reset fg var and body bg
+                        document.documentElement.style.removeProperty('--fg');
+                        document.documentElement.style.removeProperty('--accent');
+                        document.body.style.removeProperty('background-color');
+                        if (!enabled || !t) return;
+                        // Helpers for color parsing and contrast check
+                        function hexToRgb(hex) {
+                            const m = String(hex).trim().match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+                            if (!m) return null;
+                            let h = m[1];
+                            if (h.length === 3) h = h.split('').map(c => c + c).join('');
+                            const num = parseInt(h, 16);
+                            return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+                        }
+                        function relLum(rgb) {
+                            function chan(v) {
+                                v /= 255;
+                                return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+                            }
+                            return 0.2126 * chan(rgb.r) + 0.7152 * chan(rgb.g) + 0.0722 * chan(rgb.b);
+                        }
+                        function contrast(rgb1, rgb2) {
+                            const L1 = relLum(rgb1) + 0.05;
+                            const L2 = relLum(rgb2) + 0.05;
+                            return L1 > L2 ? L1 / L2 : L2 / L1;
+                        }
+                        // Assume a dark background as baseline for contrast checks
+                        const baselineBg = hexToRgb('#141824');
+                        const dirRe = /\[(bg|fg|accent|banner|marquee):([^\]]+)\]/gi;
+                        let m;
+                        const seen = { };
+                        while ((m = dirRe.exec(t)) !== null) {
+                            const key = (m[1] || '').toLowerCase();
+                            const valRaw = (m[2] || '').trim();
+                            if (!valRaw) continue;
+                            if (seen[key]) continue; // first wins
+                            seen[key] = true;
+                            if (key === 'bg') {
+                                const col = valRaw;
+                                if (/^#[0-9a-fA-F]{3,6}$/.test(col)) {
+                                    const rgb = hexToRgb(col);
+                                    if (rgb && contrast(rgb, baselineBg) >= 1.2) { // avoid near-identical bg
+                                        document.body.style.backgroundColor = col;
+                                    }
+                                }
+                            } else if (key === 'fg') {
+                                const col = valRaw;
+                                if (/^#[0-9a-fA-F]{3,6}$/.test(col)) {
+                                    const rgb = hexToRgb(col);
+                                    // Ensure decent contrast vs assumed dark bg
+                                    if (rgb && contrast(rgb, baselineBg) >= 2.6) {
+                                        document.documentElement.style.setProperty('--fg', col);
+                                    }
+                                }
+                            } else if (key === 'accent') {
+                                const col = valRaw;
+                                if (/^#[0-9a-fA-F]{3,6}$/.test(col)) {
+                                    document.documentElement.style.setProperty('--accent', col);
+                                }
+                            } else if (key === 'banner') {
+                                try {
+                                    const url = valRaw;
+                                    if (/^https?:\/\//i.test(url)) {
+                                        const img = document.createElement('img');
+                                        img.className = 'banner';
+                                        img.referrerPolicy = 'no-referrer';
+                                        img.alt = 'banner';
+                                        img.src = url;
+                                        if (decor) decor.appendChild(img);
+                                    }
+                                } catch (e) {}
+                            } else if (key === 'marquee') {
+                                const txt = valRaw.replace(/[\r\n]+/g, ' ').slice(0, 200);
+                                const div = document.createElement('div');
+                                div.className = 'marquee';
+                                const span = document.createElement('span');
+                                span.textContent = txt;
+                                div.appendChild(span);
+                                if (decor) decor.appendChild(div);
+                            }
+                        }
                     } catch (e) {}
                 }
                 function startAI() {
@@ -1527,6 +1726,86 @@ class MainWindow(QMainWindow):
             self.chat.setHtml(base_html, QUrl("about:blank"))
         except Exception:
             pass
+
+    def _on_chat_loaded(self, ok: bool) -> None:
+        # Mark ready, flush buffered messages, and populate topic/decor for current channel
+        try:
+            self._chat_ready = bool(ok)
+            # Flush any pending messages
+            buf = list(getattr(self, "_chat_buf", []) or [])
+            setattr(self, "_chat_buf", [])
+            for html in buf:
+                try:
+                    self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+                except Exception:
+                    pass
+            # Apply topic + decorations for current channel
+            cur = self.bridge.current_channel() or ""
+            if cur:
+                txt = (self._topic_by_channel.get(cur, "") or "").strip()
+                tip = self._topic_tooltip(cur)
+                try:
+                    self.chat.page().runJavaScript(
+                        f"setTopic({json.dumps(txt)}, {json.dumps(tip)})"
+                    )
+                except Exception:
+                    pass
+                try:
+                    enabled = self._decor_enabled_for(cur)
+                    self.chat.page().runJavaScript(
+                        f"applyTopicDecorations({json.dumps(txt)}, {str(bool(enabled)).lower()})"
+                    )
+                except Exception:
+                    pass
+            else:
+                # Ensure placeholder if no channel selected
+                try:
+                    self.chat.page().runJavaScript("setTopic('', '')")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _decor_enabled_for(self, comp: str) -> bool:
+        """Return True if decorations are enabled for channel label 'net:#chan'.
+
+        Channel override takes precedence; network default otherwise. Defaults to False.
+        """
+        try:
+            s = QSettings("DeadHop", "DeadHopClient")
+            # Channel-specific
+            val = s.value(f"decorations/chan/{comp}")
+            if val is not None:
+                return bool(str(val).lower() in ("1", "true", "yes"))
+            # Network
+            net = comp.split(":", 1)[0] if ":" in comp else comp
+            val2 = s.value(f"decorations/net/{net}")
+            if val2 is not None:
+                return bool(str(val2).lower() in ("1", "true", "yes"))
+        except Exception:
+            pass
+        return False
+
+    def _topic_tooltip(self, comp: str) -> str:
+        """Build tooltip text for the topic bar for channel label 'net:#chan'."""
+        try:
+            topic = (self._topic_by_channel.get(comp, "") or "").strip() or "No topic set"
+            setter, when = self._topic_meta_by_channel.get(comp, (None, None))
+            if setter and when:
+                try:
+                    t = time.localtime(int(when))
+                    ts = (
+                        f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d} {t.tm_hour:02d}:{t.tm_min:02d}"
+                    )
+                except Exception:
+                    ts = ""
+                extra = f" • set by {setter}"
+                if ts:
+                    extra += f" at {ts}"
+                return f"{topic}{extra}"
+            return topic
+        except Exception:
+            return ""
 
     def _apply_chat_theme(self) -> None:
         try:
@@ -2086,6 +2365,53 @@ class MainWindow(QMainWindow):
                             server_emit(f"LIST {chname}  {users}  :{topic}")
                         elif code == "323":
                             server_emit("— End of LIST —")
+                        elif code == "332":
+                            # RPL_TOPIC: ":server 332 me #chan :topic text"
+                            try:
+                                chname = parts[3] if len(parts) > 3 else None
+                                if chname and net:
+                                    comp = f"{net}:{chname}"
+                                    topic = raw.split(":", 2)[-1] if ":" in raw else ""
+                                    # Dedupe: only update if changed or missing
+                                    prev = (self._topic_by_channel.get(comp, "") or "").strip()
+                                    cur = (topic or "").strip()
+                                    if cur != prev:
+                                        self._topic_by_channel[comp] = topic or ""
+                                        # Topic text known; tooltip may be updated when 333 arrives
+                                        if (self.bridge.current_channel() or "") == comp:
+                                            tip = self._topic_tooltip(comp)
+                                            self.chat.page().runJavaScript(
+                                                f"setTopic({json.dumps(topic or '')}, {json.dumps(tip)})"
+                                            )
+                                            # Apply decorations if enabled
+                                            enabled = self._decor_enabled_for(comp)
+                                            self.chat.page().runJavaScript(
+                                                f"applyTopicDecorations({json.dumps(topic or '')}, {str(bool(enabled)).lower()})"
+                                            )
+                            except Exception:
+                                pass
+                        elif code == "333":
+                            # RPL_TOPICWHOTIME: ":server 333 me #chan setter 1700000000"
+                            try:
+                                chname = parts[3] if len(parts) > 3 else None
+                                setter = parts[4] if len(parts) > 4 else None
+                                when_s = parts[5] if len(parts) > 5 else None
+                                when_i = None
+                                try:
+                                    when_i = int(when_s) if when_s is not None else None
+                                except Exception:
+                                    when_i = None
+                                if chname and net:
+                                    comp = f"{net}:{chname}"
+                                    self._topic_meta_by_channel[comp] = (setter, when_i)
+                                    if (self.bridge.current_channel() or "") == comp:
+                                        tip = self._topic_tooltip(comp)
+                                        txt = self._topic_by_channel.get(comp, "") or ""
+                                        self.chat.page().runJavaScript(
+                                            f"setTopic({json.dumps(txt)}, {json.dumps(tip)})"
+                                        )
+                            except Exception:
+                                pass
                         elif code == "433":
                             bad = parts[3] if len(parts) > 3 else ""
                             server_emit(f"Nick already in use: {bad}")
@@ -2239,6 +2565,21 @@ class MainWindow(QMainWindow):
                             comp = comp_for_chan(ch)
                             if comp:
                                 channel_emit(comp, f"• {nick} set topic: {topic}")
+                                # Update topic cache and meta from typed event
+                                try:
+                                    self._topic_by_channel[comp] = topic or ""
+                                    self._topic_meta_by_channel[comp] = (nick, int(time.time()))
+                                    if (self.bridge.current_channel() or "") == comp:
+                                        tip = self._topic_tooltip(comp)
+                                        self.chat.page().runJavaScript(
+                                            f"setTopic({json.dumps(topic or '')}, {json.dumps(tip)})"
+                                        )
+                                        enabled = self._decor_enabled_for(comp)
+                                        self.chat.page().runJavaScript(
+                                            f"applyTopicDecorations({json.dumps(topic or '')}, {str(bool(enabled)).lower()})"
+                                        )
+                                except Exception:
+                                    pass
                             return
                         if cmd == "MODE" and len(parts) >= 4:
                             target = parts[2]
@@ -2282,6 +2623,22 @@ class MainWindow(QMainWindow):
         # Show allowed line in status bar and chat (italic)
         self.status.showMessage(clean, 2500)
         self._chat_append(f"<i>{clean}</i>")
+        # If this is a reconnect line, mark all channels of that net for dimming on first view
+        try:
+            if "connected. registering" in low:
+                # Extract [net] prefix
+                net2 = None
+                if clean.startswith("[") and "]" in clean:
+                    net2 = clean.split("]", 1)[0][1:]
+                if net2:
+                    for lbl in list(getattr(self, "_channel_labels", []) or []):
+                        try:
+                            if isinstance(lbl, str) and lbl.startswith(f"{net2}:"):
+                                self._dim_needed_for_channel.add(lbl)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     def _on_channel_action(self, ch: str, action: str) -> None:
         a = action.lower()
@@ -3788,27 +4145,20 @@ class MainWindow(QMainWindow):
         try:
             self.logger.append("irc", target or cur or "status", f"<{nick}> {text}", ts)
         except Exception:
-            pass
-
-    def _on_status(self, s: str) -> None:
-        # Expect format like "[net] message"; persist and show when that network is selected in the server tree
-        try:
-            net = None
-            msg = s or ""
-            if msg.startswith("[") and "]" in msg:
-                net = msg.split("]", 1)[0][1:]
-                msg = msg.split("]", 1)[1].strip()
-            if not net:
-                return
-            # Persist raw status lines per-network
-            buf = self._status_by_net.setdefault(net, [])
-            buf.append(msg)
+            # Fallback: buffer into per-network status log
+            try:
+                net_id = (target or cur or "").split(":", 1)[0] or "default"
+            except Exception:
+                net_id = "default"
+            ms = text or ""
+            buf = self._status_by_net.setdefault(net_id, [])
+            buf.append(ms)
             if len(buf) > 500:
                 del buf[:-500]
             # If the network (top item) is currently selected, render live
             try:
-                if getattr(self, "_selected_network", None) == net:
-                    html = f"<span class='sys'><i>{self._strip_irc_codes(msg)}</i></span>"
+                if getattr(self, "_selected_network", None) == net_id:
+                    html = f"<span class='sys'><i>{self._strip_irc_codes(ms)}</i></span>"
                     self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
             except Exception:
                 pass
@@ -3946,7 +4296,23 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_channel_topic(self, comp: str, actor: str, topic: str) -> None:
-        self._channel_emit(comp, f"• {actor} set topic: {topic}")
+        try:
+            # Cache topic text for this channel
+            self._topic_by_channel[comp] = topic or ""
+        except Exception:
+            pass
+        # Update topic bar if this channel is current
+        try:
+            if (self.bridge.current_channel() or "") == comp:
+                self.chat.page().runJavaScript(f"setTopic({json.dumps(topic or '')})")
+        except Exception:
+            pass
+        # Emit a system message about the topic change
+        try:
+            who = actor or "server"
+            self._channel_emit(comp, f"• {who} set topic: {topic}")
+        except Exception:
+            pass
 
     def _on_channel_mode(self, comp: str, actor: str, modes: str) -> None:
         ch = comp.split(":", 1)[1] if ":" in comp else comp
@@ -4811,20 +5177,40 @@ class MainWindow(QMainWindow):
                     pass
                 # Best-effort: select channel in sidebar if API exists
                 try:
-                    sel = getattr(self.sidebar, "select_channel", None)
-                    if callable(sel):
-                        sel(ch)
-                except Exception:
-                    pass
-                # Clear chat view and replay scrollback for the selected label (channel or server)
-                try:
-                    self.chat.page().runJavaScript(
-                        "(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();"
-                    )
+                    self.sidebar.select_channel(ch)
                 except Exception:
                     pass
                 try:
                     self._replay_scrollback(ch)
+                except Exception:
+                    pass
+                # Update topic bar for this channel if known
+                try:
+                    txt = (self._topic_by_channel.get(ch, "") or "").strip()
+                    tip = self._topic_tooltip(ch)
+                    self.chat.page().runJavaScript(
+                        f"setTopic({json.dumps(txt)}, {json.dumps(tip)})"
+                    )
+                    enabled = self._decor_enabled_for(ch)
+                    self.chat.page().runJavaScript(
+                        f"applyTopicDecorations({json.dumps(txt)}, {str(bool(enabled)).lower()})"
+                    )
+                except Exception:
+                    pass
+                # If this channel was marked for dimming after reconnect, apply once and insert a marker with topic
+                try:
+                    if ch in getattr(self, "_dim_needed_for_channel", set()):
+                        try:
+                            import html as _html
+
+                            t = _html.escape(self._topic_by_channel.get(ch, "") or "No topic set")
+                        except Exception:
+                            t = self._topic_by_channel.get(ch, "") or "No topic set"
+                        marker = f"<span class='sys'><i>— Rejoined — Topic: {t}</i></span>"
+                        self.chat.page().runJavaScript(
+                            f"dimScrollbackAndMark({json.dumps(marker)})"
+                        )
+                        self._dim_needed_for_channel.discard(ch)
                 except Exception:
                     pass
                 # Refresh members list and completion names from cache, if available
@@ -4835,6 +5221,132 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self.status.showMessage(f"Switched to {ch}", 1500)
+        except Exception:
+            pass
+
+    def _topic_tooltip(self, comp: str) -> str:
+        try:
+            topic = (self._topic_by_channel.get(comp, "") or "").strip()
+            setter, when_i = self._topic_meta_by_channel.get(comp, (None, None))
+            if setter or when_i:
+                try:
+                    tstr = ""
+                    if when_i:
+                        import datetime as _dt
+
+                        tstr = _dt.datetime.fromtimestamp(when_i).strftime("%Y-%m-%d %H:%M")
+                    parts = []
+                    if setter:
+                        parts.append(f"set by {setter}")
+                    if tstr:
+                        parts.append(f"at {tstr}")
+                    meta = " ".join(parts)
+                    if meta:
+                        return f"{topic or 'No topic set'} — {meta}"
+                except Exception:
+                    pass
+            return topic or "No topic set"
+        except Exception:
+            return "No topic set"
+
+    def _decor_enabled_for(self, comp: str) -> bool:
+        try:
+            # comp is like "net:#chan"
+            if not comp or comp.startswith("[") or ":" not in comp:
+                return False
+            net, _ch = comp.split(":", 1)
+            # Channel override wins
+            if comp in self._decor_channel_enabled:
+                return bool(self._decor_channel_enabled.get(comp))
+            # Else network default
+            if net in self._decor_net_enabled:
+                return bool(self._decor_net_enabled.get(net))
+            return False
+        except Exception:
+            return False
+
+    # ----- Decorations UI actions -----
+    def _on_network_action(self, net: str, action: str) -> None:
+        try:
+            if action == "Decorations: Enable":
+                self._decor_net_enabled[net] = True
+                try:
+                    s = QSettings("DeadHop", "DeadHopClient")
+                    s.setValue(f"decorations/net/{net}", True)
+                except Exception:
+                    pass
+            elif action == "Decorations: Disable":
+                self._decor_net_enabled[net] = False
+                try:
+                    s = QSettings("DeadHop", "DeadHopClient")
+                    s.setValue(f"decorations/net/{net}", False)
+                except Exception:
+                    pass
+            else:
+                return
+            # Re-apply for current channel if it belongs to this network
+            comp = self.bridge.current_channel() or ""
+            if comp.startswith(f"{net}:"):
+                try:
+                    txt = (self._topic_by_channel.get(comp, "") or "").strip()
+                    tip = self._topic_tooltip(comp)
+                    self.chat.page().runJavaScript(
+                        f"setTopic({json.dumps(txt)}, {json.dumps(tip)})"
+                    )
+                    enabled = self._decor_enabled_for(comp)
+                    self.chat.page().runJavaScript(
+                        f"applyTopicDecorations({json.dumps(txt)}, {str(bool(enabled)).lower()})"
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _on_channel_action(self, ch: str, action: str) -> None:
+        try:
+            if action == "Topic decorations: Inherit":
+                if ch in self._decor_channel_enabled:
+                    try:
+                        del self._decor_channel_enabled[ch]
+                    except Exception:
+                        pass
+                try:
+                    s = QSettings("DeadHop", "DeadHopClient")
+                    s.remove(f"decorations/chan/{ch}")
+                except Exception:
+                    pass
+            elif action == "Topic decorations: Enable":
+                self._decor_channel_enabled[ch] = True
+                try:
+                    s = QSettings("DeadHop", "DeadHopClient")
+                    s.setValue(f"decorations/chan/{ch}", True)
+                except Exception:
+                    pass
+            elif action == "Topic decorations: Disable":
+                self._decor_channel_enabled[ch] = False
+                try:
+                    s = QSettings("DeadHop", "DeadHopClient")
+                    s.setValue(f"decorations/chan/{ch}", False)
+                except Exception:
+                    pass
+            else:
+                # Other channel actions handled elsewhere
+                return
+            # Re-apply immediately if this is the current channel
+            comp = self.bridge.current_channel() or ""
+            if comp == ch:
+                try:
+                    txt = (self._topic_by_channel.get(comp, "") or "").strip()
+                    tip = self._topic_tooltip(comp)
+                    self.chat.page().runJavaScript(
+                        f"setTopic({json.dumps(txt)}, {json.dumps(tip)})"
+                    )
+                    enabled = self._decor_enabled_for(comp)
+                    self.chat.page().runJavaScript(
+                        f"applyTopicDecorations({json.dumps(txt)}, {str(bool(enabled)).lower()})"
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
 

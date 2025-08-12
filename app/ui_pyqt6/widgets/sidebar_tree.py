@@ -160,6 +160,16 @@ class SidebarTree(QTreeWidget):
             act_disc.triggered.connect(
                 lambda _=False, n=net: self.networkAction.emit(n, "Disconnect")
             )
+            m.addSeparator()
+            # Topic decorations per-network
+            act_dec_en = m.addAction("Topic decorations: Enable")
+            act_dec_en.triggered.connect(
+                lambda _=False, n=net: self.networkAction.emit(n, "Decorations: Enable")
+            )
+            act_dec_dis = m.addAction("Topic decorations: Disable")
+            act_dec_dis.triggered.connect(
+                lambda _=False, n=net: self.networkAction.emit(n, "Decorations: Disable")
+            )
             m.exec(self.viewport().mapToGlobal(pos))
             return
         # Channel item context menu
@@ -171,7 +181,17 @@ class SidebarTree(QTreeWidget):
         if not ch:
             return
         m = QMenu(self)
-        for label in ["Open Log", "Join", "Part", "Close", "Topic", "Modes"]:
+        for label in [
+            "Open Log",
+            "Join",
+            "Part",
+            "Close",
+            "Topic",
+            "Modes",
+            "Topic decorations: Inherit",
+            "Topic decorations: Enable",
+            "Topic decorations: Disable",
+        ]:
             act = m.addAction(label)
             act.triggered.connect(lambda _=False, a=label, c=ch: self.channelAction.emit(c, a))
         m.exec(self.viewport().mapToGlobal(pos))
