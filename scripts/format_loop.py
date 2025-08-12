@@ -75,14 +75,16 @@ def main() -> int:
         )
 
         if ruff_check_rc == 0 and black_check_rc == 0:
-            print("\n✅ Clean: no further changes needed.")
+            # Avoid non-ASCII output for Windows consoles under cp1252
+            print("\nCLEAN: no further changes needed.")
             return 0
 
         # If nothing changed this iteration but still not clean, continue up to MAX_ITERS
         # (some rules require multiple passes as tools may influence each other)
 
+    # Avoid non-ASCII output for Windows consoles under cp1252
     print(
-        f"\n⚠️ Reached MAX_ITERS={MAX_ITERS} but there may still be issues. "
+        f"\nWARNING: Reached MAX_ITERS={MAX_ITERS} but there may still be issues. "
         "Consider fixing remaining Ruff diagnostics that are not auto-fixable."
     )
     # Return the last check status combined (non-zero indicates remaining issues)

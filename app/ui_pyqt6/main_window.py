@@ -1533,6 +1533,11 @@ class MainWindow(QMainWindow):
                 try:
                     # Use async-safe scheduling
                     self._schedule_async(self.bridge.sendMessage, text)
+                    # Optimistic local echo so the user sees their message immediately
+                    try:
+                        self._chat_append(self._format_message_html("You", text, ts=time.time()))
+                    except Exception:
+                        pass
                 except Exception:
                     # Fallback: raw PRIVMSG to current target
                     if cur:
