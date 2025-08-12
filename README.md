@@ -30,6 +30,36 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
+## 📡 Getting Started with IRC
+
+1) Open Servers dialog: Servers → Manage Servers…
+
+- Add a server: host, port (default 6697), TLS on/off, nick, initial channels.
+- Optional: check "Ignore invalid certs" for self‑signed servers.
+- You can prefill multiple channels (comma‑separated) and they will auto‑join.
+
+2) Connect
+
+- Servers → Connect… → pick a saved server, or use Quick Connect.
+- The sidebar populates with `net:#channel` and you can switch between channels.
+
+3) Join/Part channels quickly
+
+- Use slash commands: `/join #channel`, `/part`, `/part #other`.
+- Right‑click a channel in the sidebar for actions.
+
+### 🔐 Authentication
+
+- NickServ: after connecting, run `/msg NickServ IDENTIFY <password>`.
+- SASL: fill username/password in the server entry (if supported by the server) and reconnect.
+- User modes: Tools → My Modes… or `/mode <yourNick> +i` etc.
+
+### 🧭 Sidebar, Members, PM
+
+- Click a channel to focus. Double‑click a member to open a PM `[PM:nick]`.
+- Right‑click members for WHOIS, Query/PM, Kick/Ban/Op/Deop, Add Friend.
+- Friends dock shows monitored nicks; toggle via View → Friends.
+
 ## 🤖 AI Assistant (Local LLM via Ollama)
 
 DeadHop can stream replies from a local LLM using [Ollama](https://ollama.com/). The client talks to Ollama's HTTP API at `http://127.0.0.1:11434` using `app/ai/ollama.py`.
@@ -54,6 +84,7 @@ ollama pull llama3:8b
 
 - Launch DeadHop and open the AI chat: Tools → Start AI Chat.
 - Type your prompt; streaming responses should appear inline.
+- To route AI output into a live IRC channel: Tools → Route AI Output… and choose a target. Stop via Tools → Stop AI Routing.
 
 Notes:
 - The helper `app/ai/ollama.py` checks availability via `/api/version` and streams tokens via `/api/generate`.
@@ -68,7 +99,7 @@ Notes:
 
 ## 📝 Notes
 - First run creates a user config at `%USERPROFILE%/.peachbot_local/config.json`.
-- The IRC engine and DeadHop AI are stubbed initially; we will iterate features quickly.
+- DeadHop ships with a functional multi-server IRC engine (IRCv3-aware) and integrated AI chat.
 
 ---
 
@@ -125,6 +156,13 @@ Notes:
   - Toggle notifications: PM, mentions, highlight words, joins/parts.
 - **Tools → Plugins…**
   - Opens `app/plugins/` (created if missing) in your file explorer.
+
+## 🌐 Internal Browser and URL Grabber
+
+- View → Browser shows the built‑in web panel (Qt WebEngine).
+- Tools → Import System Cookies attempts to reuse system cookies for the current site.
+- URL Grabber panel collects links from chat automatically for quick access.
+
 
 ## ⌨️ Keyboard Shortcuts
 
