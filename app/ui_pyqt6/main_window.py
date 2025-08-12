@@ -1533,11 +1533,32 @@ class MainWindow(QMainWindow):
                 try:
                     # Use async-safe scheduling
                     self._schedule_async(self.bridge.sendMessage, text)
-                    # Optimistic local echo so the user sees their message immediately
+                    # Local echo only if server does NOT support IRCv3 echo-message
+                    do_local_echo = True
                     try:
-                        self._chat_append(self._format_message_html("You", text, ts=time.time()))
+                        if hasattr(self.bridge, "hasEchoMessage") and self.bridge.hasEchoMessage():
+                            do_local_echo = False
                     except Exception:
                         pass
+                    if do_local_echo:
+                        try:
+                            now_ts = time.time()
+                            self._chat_append(self._format_message_html("You", text, ts=now_ts))
+                            # Record recent outgoing to dedupe server echo
+                            try:
+                                rec = getattr(self, "_recent_outgoing", {})
+                                chan = cur or ""
+                                lst = rec.get(chan, [])
+                                lst.append((text, now_ts))
+                                # keep only last N and within window
+                                if len(lst) > 20:
+                                    lst = lst[-20:]
+                                rec[chan] = lst
+                                setattr(self, "_recent_outgoing", rec)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
                 except Exception:
                     # Fallback: raw PRIVMSG to current target
                     if cur:
@@ -3223,6 +3244,24 @@ class MainWindow(QMainWindow):
         if target and target == cur:
             try:
                 msg = text or ""
+                # Deduplicate against our optimistic local echo: if the server echoes
+                # our own message shortly after we sent it, skip rendering it again.
+                try:
+                    if self._my_nick and nick and nick.lower() == self._my_nick.lower():
+                        rec = getattr(self, "_recent_outgoing", {})
+                        lst = rec.get(target, [])
+                        if lst:
+                            # consider duplicates if same text within 5s
+                            cutoff = ts - 5.0
+                            # prune old
+                            lst = [(t, tts) for (t, tts) in lst if tts >= cutoff]
+                            rec[target] = lst
+                            setattr(self, "_recent_outgoing", rec)
+                            for t, _tts in lst:
+                                if t == msg:
+                                    return
+                except Exception:
+                    pass
                 # CTCP ACTION formatting: \x01ACTION ...\x01 -> "* nick ..."
                 if msg.startswith("\x01ACTION ") and msg.endswith("\x01"):
                     act = msg[len("\x01ACTION ") : -1].strip()

@@ -42,6 +42,32 @@ class BridgeQt(QObject):
             self._current_channel = ch
             self.currentChannelChanged.emit(ch)
 
+    # ----- Capability helpers -----
+    def _current_net(self) -> str | None:
+        cur = self._current_channel or ""
+        if cur and ":" in cur and not cur.startswith("["):
+            return cur.split(":", 1)[0]
+        return None
+
+    def hasCap(self, name: str) -> bool:
+        """Return True if current network has the given IRCv3 capability active."""
+        if not name:
+            return False
+        net = self._current_net()
+        if not net:
+            return False
+        irc = self._ircs.get(net)
+        if not irc:
+            return False
+        try:
+            return bool(irc.has_cap(name))
+        except Exception:
+            return False
+
+    def hasEchoMessage(self) -> bool:
+        """Convenience for hasCap('echo-message')."""
+        return self.hasCap("echo-message")
+
     @asyncSlot(str, int, bool, str, str, str, list, str, str, bool)
     async def connectHost(
         self,

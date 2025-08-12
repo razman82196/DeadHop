@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!-- Product definition -->
+  <Product Id="*"
+           Name="PeachClient"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="DeadHop"
+           UpgradeCode="8A9A2A8B-2C9A-4F7C-9E9B-1F3C2F7E1D10">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"/>
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high"/>
+
+    <MajorUpgrade AllowDowngrades="no"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed."/>
+
+    <!-- UI: use default WixUI_InstallDir to allow choosing folder -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+    <UIRef Id="WixUI_InstallDir" />
+
+    <!-- Icon and ARP metadata -->
+    <Icon Id="AppIcon" SourceFile="app\\resources\\icons\\custom\\main app pixels.ico"/>
+    <Property Id="ARPPRODUCTICON" Value="AppIcon"/>
+
+    <!-- Directories -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="PeachClient" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ProgramMenuDir" Name="PeachClient" />
+      </Directory>
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <!-- Harvested files from dist/PeachClient via heat.exe will produce a ComponentGroup named PeachClientGroup -->
+    <Feature Id="MainFeature" Title="PeachClient" Level="1">
+      <ComponentGroupRef Id="PeachClientGroup" />
+      <ComponentRef Id="PeachClientShortcuts" />
+    </Feature>
+
+    <!-- Shortcuts component: create Start Menu and Desktop shortcuts to the main EXE -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="PeachClientShortcuts" Guid="F0A1D2B3-4C5D-6E7F-8899-A0B1C2D3E4F5">
+        <CreateFolder />
+        <!-- Shortcut to the main EXE; target path will resolve at install time -->
+        <Shortcut Id="StartMenuShortcut"
+                  Name="PeachClient"
+                  Directory="ProgramMenuDir"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon"
+                  Advertise="no"
+                  Target="[INSTALLDIR]PeachClient.exe" />
+        <Shortcut Id="DesktopShortcut"
+                  Name="PeachClient"
+                  Directory="DesktopFolder"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon"
+                  Advertise="no"
+                  Target="[INSTALLDIR]PeachClient.exe" />
+        <RemoveFolder Id="ProgramMenuDir" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\\DeadHop\\PeachClient" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+
+  </Product>
+</Wix>
