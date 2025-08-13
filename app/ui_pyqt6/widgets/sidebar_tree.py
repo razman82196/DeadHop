@@ -90,6 +90,16 @@ class SidebarTree(QTreeWidget):
                     if idx >= 0:
                         self.takeTopLevelItem(idx)
                 del self._items[full]
+        # Remove any network roots that no longer have children (e.g. after disconnect)
+        for net, root in list(self._nets.items()):
+            try:
+                if root.childCount() == 0:
+                    idx = self.indexOfTopLevelItem(root)
+                    if idx >= 0:
+                        self.takeTopLevelItem(idx)
+                    del self._nets[net]
+            except Exception:
+                pass
         # Add missing
         for full in desired:
             if full in self._items:

@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSlider,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -46,6 +47,9 @@ class SettingsDialog(QDialog):
         sound_hl_path: str | None = None,
         sound_presence_path: str | None = None,
         sound_volume: float | None = None,
+        # Scrollback retention
+        scrollback_ttl_days: int | None = None,
+        scrollback_max_files: int | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -139,6 +143,29 @@ class SettingsDialog(QDialog):
         self.chk_try_starttls = QCheckBox("Try STARTTLS when available", self)
         self.chk_try_starttls.setChecked(bool(try_starttls))
         v.addWidget(self.chk_try_starttls)
+
+        # --- History / Scrollback retention ---
+        row_hist1 = QHBoxLayout()
+        row_hist1.addWidget(QLabel("Scrollback TTL (days, 0 = disabled):"))
+        self.sp_ttl_days = QSpinBox(self)
+        self.sp_ttl_days.setRange(0, 3650)
+        self.sp_ttl_days.setValue(
+            int(0 if scrollback_ttl_days is None else max(0, int(scrollback_ttl_days)))
+        )
+        row_hist1.addWidget(self.sp_ttl_days)
+        row_hist1.addStretch(1)
+        v.addLayout(row_hist1)
+
+        row_hist2 = QHBoxLayout()
+        row_hist2.addWidget(QLabel("Max scrollback files (0 = unlimited):"))
+        self.sp_max_files = QSpinBox(self)
+        self.sp_max_files.setRange(0, 10000)
+        self.sp_max_files.setValue(
+            int(0 if scrollback_max_files is None else max(0, int(scrollback_max_files)))
+        )
+        row_hist2.addWidget(self.sp_max_files)
+        row_hist2.addStretch(1)
+        v.addLayout(row_hist2)
 
         # --- Sounds tab ---
         pg_sounds = QDialog(self)
@@ -300,3 +327,16 @@ class SettingsDialog(QDialog):
 
     def selected_sound_volume(self) -> float:
         return float(self.sld_vol.value()) / 100.0
+
+    # History / Scrollback accessors
+    def selected_scrollback_ttl_days(self) -> int:
+        try:
+            return int(self.sp_ttl_days.value())
+        except Exception:
+            return 0
+
+    def selected_scrollback_max_files(self) -> int:
+        try:
+            return int(self.sp_max_files.value())
+        except Exception:
+            return 0

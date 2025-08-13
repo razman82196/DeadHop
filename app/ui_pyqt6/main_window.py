@@ -252,6 +252,11 @@ class MainWindow(QMainWindow):
         # In-memory scrollback per channel/label -> list[HTML]
         self._scrollback: dict[str, list[str]] = {}
         self._scrollback_limit: int = 1000
+        # Scrollback retention policy (can be adjusted in Settings later)
+        # TTL in days for scrollback files; <=0 disables TTL pruning
+        self._scrollback_ttl_days: int = 30
+        # Max number of channel scrollback files to retain (newest kept); <=0 disables cap
+        self._scrollback_max_files: int = 200
         # Per-network status buffer (server messages rendered when selecting a network)
         self._status_by_net: dict[str, list[str]] = {}
         # Track current topic per channel label (e.g. "net:#chan")
@@ -271,7 +276,20 @@ class MainWindow(QMainWindow):
             base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         except Exception:
             base = None
-        self._scrollback_dir = base
+        # Create app scrollback dir under AppDataLocation
+        try:
+            if base:
+                p = Path(base) / "scrollback"
+                p.mkdir(parents=True, exist_ok=True)
+                self._scrollback_dir = str(p)
+            else:
+                # Fallback to local relative directory
+                p = Path(__file__).resolve().parents[1] / "resources" / "scrollback"
+                p.mkdir(parents=True, exist_ok=True)
+                self._scrollback_dir = str(p)
+        except Exception:
+            # As a last resort, disable persistence gracefully
+            self._scrollback_dir = None
         # Notification preferences (defaults)
         self._notify_on_pm = True
         self._notify_on_mention = True
@@ -737,6 +755,24 @@ class MainWindow(QMainWindow):
 
         # Apply saved settings and maybe autoconnect
         try:
+            # Load persisted scrollback retention first (override defaults)
+            try:
+                s = QSettings("DeadHop", "DeadHopClient")
+                try:
+                    self._scrollback_ttl_days = int(
+                        s.value("scrollback/ttl_days", self._scrollback_ttl_days)
+                    )
+                except Exception:
+                    pass
+                try:
+                    self._scrollback_max_files = int(
+                        s.value("scrollback/max_files", self._scrollback_max_files)
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            # Continue loading remaining settings if available
             self._load_settings()
             self._apply_settings()
         except Exception:
@@ -745,6 +781,15 @@ class MainWindow(QMainWindow):
             self._maybe_autoconnect_from_settings()
         except Exception:
             pass
+
+        # One-time prune at startup (best-effort, async-safe)
+        try:
+            self._schedule_async(self._prune_scrollback)
+        except Exception:
+            try:
+                self._prune_scrollback()
+            except Exception:
+                pass
 
         # Unread/highlight counters
         self._unread: dict[str, int] = {}
@@ -1273,6 +1318,12 @@ class MainWindow(QMainWindow):
             a_settings = m_tools.addAction("&Settings…")
             a_settings.setShortcut(QKeySequence.StandardKey.Preferences)
             a_settings.triggered.connect(self._open_settings_dialog)
+            # History tools
+            m_tools.addSeparator()
+            a_clear_hist = m_tools.addAction("&Clear Current Channel History…")
+            a_clear_hist.triggered.connect(self._clear_current_channel_history)
+            a_prune_now = m_tools.addAction("&Prune Scrollback Now")
+            a_prune_now.triggered.connect(self._prune_scrollback)
 
             # Help
             m_help = mb.addMenu("&Help")
@@ -3435,6 +3486,15 @@ class MainWindow(QMainWindow):
                 sound_volume = 0.7
         except Exception:
             pass
+        # Load scrollback retention settings
+        scrollback_ttl_days = 0
+        scrollback_max_files = 0
+        try:
+            s = QSettings("DeadHop", "DeadHopClient")
+            scrollback_ttl_days = int(s.value("scrollback/ttl_days", 0, type=int))
+            scrollback_max_files = int(s.value("scrollback/max_files", 0, type=int))
+        except Exception:
+            pass
         dlg = SettingsDialog(
             self,
             theme_options=theme_options,
@@ -3462,6 +3522,9 @@ class MainWindow(QMainWindow):
             sound_hl_path=sound_hl_path,
             sound_presence_path=sound_presence_path,
             sound_volume=float(sound_volume),
+            # Scrollback retention
+            scrollback_ttl_days=scrollback_ttl_days,
+            scrollback_max_files=scrollback_max_files,
         )
         if dlg.exec() == dlg.DialogCode.Accepted:
             # Theme
@@ -3515,11 +3578,30 @@ class MainWindow(QMainWindow):
                     self._try_starttls = dlg.selected_try_starttls()
             except Exception:
                 pass
+            # Scrollback retention from dialog
+            try:
+                self._scrollback_ttl_days = int(max(0, int(dlg.selected_scrollback_ttl_days())))
+            except Exception:
+                self._scrollback_ttl_days = max(
+                    0, int(getattr(self, "_scrollback_ttl_days", 0) or 0)
+                )
+            try:
+                self._scrollback_max_files = int(max(0, int(dlg.selected_scrollback_max_files())))
+            except Exception:
+                self._scrollback_max_files = max(
+                    0, int(getattr(self, "_scrollback_max_files", 0) or 0)
+                )
+            # Schedule prune at startup
+            self._schedule_async(self._prune_scrollback)
+
             # Persist
         try:
             # Save autoconnect flag only (server details saved via Connect dialog)
             s = QSettings("DeadHop", "DeadHopClient")
             s.setValue("server/autoconnect", dlg.selected_autoconnect())
+            # Persist scrollback retention
+            s.setValue("scrollback/ttl_days", int(getattr(self, "_scrollback_ttl_days", 0) or 0))
+            s.setValue("scrollback/max_files", int(getattr(self, "_scrollback_max_files", 0) or 0))
         except Exception:
             pass
         self._save_settings()
@@ -4003,6 +4085,58 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    # ----- Scrollback retention/pruning helpers -----
+    def _prune_scrollback(self) -> None:
+        """Apply TTL and max-file retention policies to scrollback on disk.
+
+        - TTL: delete files older than N days (if enabled).
+        - Max files: keep newest N files and delete the rest (if enabled).
+        """
+        try:
+            base = getattr(self, "_scrollback_dir", None)
+            if not base:
+                return
+            import time as _t
+            from pathlib import Path as _P
+
+            p = _P(base)
+            if not p.exists():
+                return
+            files = sorted(
+                [f for f in p.glob("scrollback_*.json") if f.is_file()],
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            if not files:
+                return
+            # TTL pruning
+            try:
+                ttl_days = int(getattr(self, "_scrollback_ttl_days", 0) or 0)
+            except Exception:
+                ttl_days = 0
+            if ttl_days > 0:
+                cutoff = _t.time() - (ttl_days * 86400)
+                for f in list(files):
+                    try:
+                        if f.stat().st_mtime < cutoff:
+                            f.unlink(missing_ok=True)
+                            files.remove(f)
+                    except Exception:
+                        pass
+            # Max files pruning
+            try:
+                max_files = int(getattr(self, "_scrollback_max_files", 0) or 0)
+            except Exception:
+                max_files = 0
+            if max_files > 0 and len(files) > max_files:
+                for f in files[max_files:]:
+                    try:
+                        f.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def _sync_theme_actions(self) -> None:
         # Reflect current theme selection in checkable actions
         if not hasattr(self, "_theme_actions"):
@@ -4055,11 +4189,39 @@ class MainWindow(QMainWindow):
 
     # ----- Bridge callbacks -----
     def _on_message(self, nick: str, target: str, text: str, ts: float) -> None:
-        # Route to chat only if matches current channel
+        # Always record into per-channel scrollback; render only if active
         cur = self.bridge.current_channel()
-        if target and target == cur:
+        try:
+            msg = text or ""
+            # CTCP ACTION formatting: \x01ACTION ...\x01 -> "* nick ..."
+            if msg.startswith("\x01ACTION ") and msg.endswith("\x01"):
+                act = msg[len("\x01ACTION ") : -1].strip()
+                rendered = self._format_message_html(nick, f"* {act}", ts)
+            else:
+                rendered = self._format_message_html(nick, self._strip_irc_codes(msg), ts)
+        except Exception:
+            rendered = None
+
+        # Append to scrollback buffer for this composite label
+        try:
+            if target and rendered:
+                sb = self._scrollback.setdefault(target, [])
+                sb.append(rendered)
+                if len(sb) > self._scrollback_limit:
+                    del sb[: -self._scrollback_limit]
+                # Persist updated scrollback for this channel
+                try:
+                    self._scrollback_save(target, sb)
+                    # Best-effort prune according to policy
+                    self._prune_scrollback()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Route to chat only if matches current channel (with optimistic echo dedup)
+        if target and target == cur and rendered:
             try:
-                msg = text or ""
                 # Deduplicate against our optimistic local echo: if the server echoes
                 # our own message shortly after we sent it, skip rendering it again.
                 try:
@@ -4078,12 +4240,6 @@ class MainWindow(QMainWindow):
                                     return
                 except Exception:
                     pass
-                # CTCP ACTION formatting: \x01ACTION ...\x01 -> "* nick ..."
-                if msg.startswith("\x01ACTION ") and msg.endswith("\x01"):
-                    act = msg[len("\x01ACTION ") : -1].strip()
-                    rendered = self._format_message_html(nick, f"* {act}", ts)
-                else:
-                    rendered = self._format_message_html(nick, self._strip_irc_codes(msg), ts)
                 self._chat_append(rendered)
             except Exception:
                 pass
@@ -4213,6 +4369,63 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def _on_current_channel_changed(self, comp: str) -> None:
+        """Handle switching channels: load and render per-channel scrollback and state."""
+        try:
+            # Clear server selection context
+            self._selected_network = None
+        except Exception:
+            pass
+        try:
+            # Reset unread/highlight counters in sidebar for this channel
+            if comp:
+                self._unread[comp] = 0
+                self._highlights[comp] = self._highlights.get(comp, 0)
+                try:
+                    self.sidebar.set_unread(comp, 0, self._highlights.get(comp, 0))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Clear chat view
+        try:
+            self.chat.page().runJavaScript(
+                "(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();"
+            )
+        except Exception:
+            pass
+        # Load scrollback if not in memory
+        try:
+            buf = self._scrollback.get(comp)
+            if not buf:
+                buf = self._scrollback_load(comp)
+                if buf:
+                    self._scrollback[comp] = list(buf)
+        except Exception:
+            buf = []
+        # Render scrollback
+        try:
+            for html in list(buf or []):
+                self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
+        except Exception:
+            pass
+        # Topic bar
+        try:
+            topic = self._topic_by_channel.get(comp, "")
+            self.chat.page().runJavaScript(f"setTopic({json.dumps(topic)})")
+        except Exception:
+            pass
+        # Members list and composer names
+        try:
+            names = list(self._names_by_channel.get(comp, []))
+            self.members.set_members(list(names) or [comp.split(":", 1)[-1]])
+            try:
+                self.composer.set_completion_names(list(names))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     # ----- Typed IRC event handlers (JOIN/PART/QUIT/NICK/TOPIC/MODE) -----
     def _channel_emit(self, comp: str, text: str) -> None:
         try:
@@ -4223,6 +4436,12 @@ class MainWindow(QMainWindow):
             sb.append(html)
             if len(sb) > self._scrollback_limit:
                 del sb[: -self._scrollback_limit]
+            # Persist system messages as well
+            try:
+                self._scrollback_save(comp, sb)
+                self._prune_scrollback()
+            except Exception:
+                pass
             if (self.bridge.current_channel() or "") == comp:
                 self.chat.page().runJavaScript(f"appendMessage({json.dumps(html)})")
             else:
@@ -4232,6 +4451,51 @@ class MainWindow(QMainWindow):
                     self.sidebar.set_unread(comp, self._unread[comp], self._highlights.get(comp, 0))
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+    def _clear_current_channel_history(self) -> None:
+        """Clear in-memory and on-disk history for the current channel, and refresh UI."""
+        try:
+            comp = self.bridge.current_channel() or ""
+            if not comp:
+                return
+            # Clear memory
+            try:
+                self._scrollback[comp] = []
+            except Exception:
+                pass
+            # Remove file
+            try:
+                path = self._scrollback_path(comp)
+                if path:
+                    import os as _os
+
+                    if _os.path.exists(path):
+                        _os.remove(path)
+            except Exception:
+                pass
+            # Clear chat view
+            try:
+                self.chat.page().runJavaScript(
+                    "(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();"
+                )
+            except Exception:
+                pass
+            # Keep topic bar and members; show a system notice that history was cleared
+            try:
+                note = "<span class='sys'><i>History cleared for this channel.</i></span>"
+                self._scrollback.setdefault(comp, []).append(note)
+                self.chat.page().runJavaScript(f"appendMessage({json.dumps(note)})")
+            except Exception:
+                pass
+            # Update unread to zero
+            try:
+                self._unread[comp] = 0
+                self.sidebar.set_unread(comp, 0, self._highlights.get(comp, 0))
+            except Exception:
+                pass
+            self.status.showMessage("Channel history cleared", 2000)
         except Exception:
             pass
 
@@ -5181,6 +5445,13 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 try:
+                    # Clear chat view before replay to avoid duplicate appends when refocusing
+                    try:
+                        self.chat.page().runJavaScript(
+                            "(function(){var c=document.getElementById('chat'); if(c) c.innerHTML='';})();"
+                        )
+                    except Exception:
+                        pass
                     self._replay_scrollback(ch)
                 except Exception:
                     pass

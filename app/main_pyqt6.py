@@ -43,6 +43,8 @@ def app_icon() -> QIcon:
 
     # Prefer a connect/plug icon for taskbar if available
     candidates = [
+        # Explicitly prefer the custom Windows .ico if present
+        _CUSTOM_ICONS_DIR / "main app pixels.ico",
         # Connect-focused
         _CUSTOM_ICONS_DIR / "connected.svg",
         _CUSTOM_ICONS_DIR / "connected.png",
