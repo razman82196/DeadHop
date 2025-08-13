@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-# from .server_editor_dialog import ServerEditorDialog # Temporarily disabled
+from .server_editor_dialog import ServerEditorDialog
 from app.ui_pyqt6.delegates.elide_delegate import ElideDelegate
 
 
@@ -116,11 +116,10 @@ class WelcomeDialog(QDialog):
         btns_col.setSpacing(6)
         self.btn_add = QPushButton("+")
         self.btn_add.setToolTip("Add a new server")
-        self.btn_add.setEnabled(False)  # Temporarily disabled
         self.btn_edit = QPushButton(
             self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), " Edit"
         )
-        self.btn_edit.setEnabled(False)  # Temporarily disabled
+        # self.btn_edit enabled by default
         self.btn_del = QPushButton("-")
         self.btn_del.setToolTip("Delete selected server")
         self.btn_connect = QPushButton("Connect")
@@ -254,29 +253,27 @@ class WelcomeDialog(QDialog):
 
     # ----- Event Handlers -----
     def _on_add(self) -> None:
-        # dlg = ServerEditorDialog(self)
-        # if dlg.exec():
-        #     self._populate_servers()
-        #     # Select the newly added server
-        #     for i in range(self.server_list.count()):
-        #         if self.server_list.item(i).data(Qt.ItemDataRole.UserRole) == dlg.name:
-        #             self.server_list.setCurrentRow(i)
-        #             break
-        pass  # Temporarily disabled
+        dlg = ServerEditorDialog(self)
+        if dlg.exec():
+            self._populate_servers()
+            # Select the newly added server
+            for i in range(self.server_list.count()):
+                if self.server_list.item(i).data(Qt.ItemDataRole.UserRole) == dlg.name:
+                    self.server_list.setCurrentRow(i)
+                    break
 
     def _on_edit(self) -> None:
-        # name = self.selected_server_name
-        # if not name:
-        #     return
-        # dlg = ServerEditorDialog(self, name)
-        # if dlg.exec():
-        #     self._populate_servers()
-        #     # Reselect the edited server
-        #     for i in range(self.server_list.count()):
-        #         if self.server_list.item(i).data(Qt.ItemDataRole.UserRole) == dlg.name:
-        #             self.server_list.setCurrentRow(i)
-        #             break
-        pass  # Temporarily disabled
+        name = self.selected_server_name
+        if not name:
+            return
+        dlg = ServerEditorDialog(self, name)
+        if dlg.exec():
+            self._populate_servers()
+            # Reselect the edited server
+            for i in range(self.server_list.count()):
+                if self.server_list.item(i).data(Qt.ItemDataRole.UserRole) == dlg.name:
+                    self.server_list.setCurrentRow(i)
+                    break
 
     def _on_delete(self) -> None:
         name = self.selected_server_name
