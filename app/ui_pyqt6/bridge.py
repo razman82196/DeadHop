@@ -110,6 +110,13 @@ class BridgeQt(QObject):
         sasl_user: str | None = None,
         ignore_invalid_certs: bool = False,
     ) -> None:
+        # Avoid creating multiple connections to the same host (net id)
+        try:
+            if host in self._ircs and self._ircs.get(host):
+                self.statusChanged.emit(f"[{host}] Already connected; skipping duplicate connect")
+                return
+        except Exception:
+            pass
         self.statusChanged.emit(f"Connecting to {host}:{port} (TLS={'on' if tls else 'off'})…")
         # Normalize channels (ensure leading '#')
         norm_channels = []

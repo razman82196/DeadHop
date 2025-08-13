@@ -111,26 +111,46 @@ def main() -> int:
 
     # Import here to avoid circulars during PyQt detection
     # Support both package execution and PyInstaller one-file mode
-    try:
-        from .ui_pyqt6.main_window import MainWindow  # type: ignore
-    except Exception:
-        try:
-            import sys as _sys
-            from pathlib import Path as _Path
+    # Show Welcome screen to pick a server and AI model
+    import traceback
 
-            root = _Path(__file__).resolve().parent.parent
-            if str(root) not in _sys.path:
-                _sys.path.append(str(root))
-            from app.ui_pyqt6.main_window import MainWindow  # type: ignore
-        except Exception:
-            # Last resort: import from sibling folder if laid out flat
+    from .ui_pyqt6.dialogs.welcome_dialog import WelcomeDialog
+    from .ui_pyqt6.main_window import MainWindow
+
+    selected_server: str | None = None
+    try:
+        dlg = WelcomeDialog()
+        res = dlg.exec()
+        if res == dlg.DialogCode.Accepted:
+            selected_server = dlg.selected_server_name
+            # Persist AI preferences
             try:
-                from ui_pyqt6.main_window import MainWindow  # type: ignore
-            except Exception as e:
-                raise ImportError(f"Failed to import MainWindow: {e}")
+                dlg.persist_ai_prefs()
+            except Exception:
+                print("[WelcomeDialog] Failed to persist AI prefs.")
+                traceback.print_exc()
+        else:
+            print(f"[WelcomeDialog] Closed with code: {res}")
+    except Exception as e:
+        print("[WelcomeDialog] Failed to show:", e)
+        traceback.print_exc()
+        # Non-fatal: proceed without welcome dialog
+        selected_server = None
 
     win = MainWindow()
     win.show()
+    # Optionally auto-connect to the chosen saved server
+    try:
+        if selected_server:
+            # Connect after the window is visible so status is shown
+            try:
+                fn = getattr(win, "_servers_connect_name", None)
+                if callable(fn):
+                    fn(selected_server)
+            except Exception:
+                pass
+    except Exception:
+        pass
     # qasync integration
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
